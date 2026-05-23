@@ -1,0 +1,6 @@
+# Copy this to .dev.vars (gitignored) and fill in your values for local dev.
+# Never commit .dev.vars.
+
+ANTHROPIC_KEY=sk-ant-...
+API_SECRET=local-dev-secret
+CF_ACCOUNT=

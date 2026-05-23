@@ -1,0 +1,34 @@
+# Snap & Shop — Cloudflare Worker configuration
+# Docs: https://developers.cloudflare.com/workers/wrangler/configuration/
+
+name = "snap-shop-proxy"
+main = "src/index.ts"
+compatibility_date = "2024-09-02"
+
+# ── Secrets ──────────────────────────────────────────────────────────────────
+# Do NOT put sensitive values here. Instead, use wrangler secrets:
+#
+#   wrangler secret put ANTHROPIC_KEY    # Your Anthropic API key
+#   wrangler secret put API_SECRET       # Shared secret sent by the frontend
+#   wrangler secret put CF_ACCOUNT       # Your Cloudflare account ID (optional)
+#
+# The CF_ACCOUNT secret enables routing through Cloudflare AI Gateway:
+#   https://gateway.ai.cloudflare.com/v1/{CF_ACCOUNT}/snap-shop/anthropic
+# This adds usage analytics, caching, and spend caps at no extra cost.
+
+# ── Rate limiting ─────────────────────────────────────────────────────────────
+# Configure in the Cloudflare dashboard: Workers & Pages → snap-shop-proxy
+# → Settings → Rate Limiting.
+# Recommended rules:
+#   - 10 req/min per IP  (blocks burst abuse)
+#   - 100 req/day per IP (prevents runaway costs)
+# Rate Limiting is GA as of Sept 2025 and works without a paid plan.
+
+# ── Local dev ─────────────────────────────────────────────────────────────────
+# Run the worker locally (with a .dev.vars file for secrets):
+#   cd workers && wrangler dev
+#
+# .dev.vars (gitignored — do NOT commit):
+#   ANTHROPIC_KEY=sk-ant-...
+#   API_SECRET=local-dev-secret
+#   CF_ACCOUNT=          # leave empty to skip AI Gateway in local dev
