@@ -8,7 +8,7 @@ import { canRecognizeTextOnDevice, recognizeTextOnDevice } from '../lib/platform
 import { filterOcrLines } from '../utils/ocrFilter.js'
 import {
   checkAppleIntelligence,
-  spellCheckLines,
+  parseOcrLines,
   suggestSpecificItems,
   parseFreeFormText,
 } from '../lib/onDeviceLLM.js'
@@ -516,16 +516,13 @@ export function useClaude() {
 
     // Native iOS: prefer Apple Foundation Models when available so the
     // Specify feature works without any network round-trip and without a
-    // configured cloud key. Categories aren't returned by the local LLM —
-    // we run each suggestion through the deterministic JS categorizer.
+    // configured cloud key. Suggestions come back as plain names (guided
+    // generation); the deterministic JS categorizer assigns sections.
     const aiCheck = await checkAppleIntelligence()
     if (aiCheck.ok) {
       try {
-        const list = await suggestSpecificItems(trimmed, context.note || '')
-        const originalLower = trimmed.toLowerCase()
-        return list
-          .filter(s => s.name.toLowerCase() !== originalLower)
-          .map(s => ({ name: s.name, category: categorizeItem(s.name) }))
+        const names = await suggestSpecificItems(trimmed, context.note || '')
+        return names.map(name => ({ name, category: categorizeItem(name) }))
       } catch (e) {
         console.log('[suggestExpansions] AppleLLM failed, falling back:', e?.message)
         // fall through to cloud / ollama path
@@ -634,59 +631,58 @@ export function useClaude() {
             throw new Error('No text recognized in image. Try a clearer photo.')
           }
 
-          // Apple Intelligence does spell-correction only — it returns one
-          // cleaned string per input line. We pass everything through to the
-          // review screen so the user can delete any obvious noise (page
-          // decoration words like HAPPINESS / CREATIVITY) themselves; the
-          // model isn't asked to classify, only to fix typos.
-          let cleanedTexts = null
-          let llmDiagnostic = null
+          // Apple Foundation Models (guided generation) returns clean,
+          // sectioned items directly — spelling fixed, noise dropped, store
+          // section assigned. No loose-JSON parsing, no index alignment.
           const aiCheck = await checkAppleIntelligence()
           if (aiCheck.ok) {
             try {
               setStatus('Cleaning up…')
-              cleanedTexts = await spellCheckLines(filtered.map(l => l.text))
-            } catch (e) {
-              llmDiagnostic = `Apple Intelligence call failed: ${e?.message || e}`
-            }
-          } else {
-            llmDiagnostic = `Apple Intelligence skipped — ${aiCheck.reason}`
-          }
-          if (llmDiagnostic) {
-            console.log('[parseList]', llmDiagnostic)
-            try {
-              const { Dialog } = await import('@capacitor/dialog')
-              await Dialog.alert({ title: 'On-device LLM', message: llmDiagnostic })
-            } catch (dlgErr) {
-              console.log('[parseList] Dialog.alert failed:', dlgErr?.message)
-            }
-          }
-
-          const items = filtered
-            .map((line, i) => {
-              const original = (line.text || '').trim()
-              const cleanedRaw = cleanedTexts?.[i]
-              // Empty string from the LLM means "drop — not purchasable". A
-              // missing/null entry means we never reached the LLM, so we
-              // keep the OCR text. A non-empty string is the cleaned name.
-              if (cleanedTexts && typeof cleanedRaw === 'string' && cleanedRaw.length === 0) {
-                return null
-              }
-              const cleanedName = (typeof cleanedRaw === 'string' && cleanedRaw.trim()) || original
-              const lowConfidence = typeof line.confidence === 'number' && line.confidence < 0.4
-              return {
+              const parsed = await parseOcrLines(filtered.map(l => l.text))
+              const items = parsed.map(p => ({
                 id: genId(),
-                name: cleanedName,
-                original,
-                category: categorizeItem(cleanedName),
+                name: p.name,
+                original: p.name,
+                // Trust the model's section unless it punted to "Other",
+                // in which case the deterministic keyword categorizer may
+                // still recognize it.
+                category: p.section && p.section !== 'Other'
+                  ? p.section
+                  : categorizeItem(p.name),
                 quantity: null,
-                note: lowConfidence ? 'Hard to read — please verify.' : null,
-                flagged: lowConfidence,
+                note: null,
+                flagged: false,
                 checked: false,
+              }))
+              if (items.length > 0) {
+                return { ok: true, items, blurWarning }
               }
-            })
-            .filter(Boolean)
+              // Model returned nothing usable — fall through to OCR-only.
+            } catch (e) {
+              console.log('[parseList] AppleLLM OCR cleanup failed, using raw OCR:', e?.message)
+              try {
+                const { Dialog } = await import('@capacitor/dialog')
+                await Dialog.alert({ title: 'On-device LLM', message: `Apple Intelligence error: ${e?.message || e}` })
+              } catch {}
+            }
+          }
 
+          // Fallback: raw OCR text + deterministic categorize (AI unavailable
+          // or it errored). Low-confidence lines get flagged for review.
+          const items = filtered.map(line => {
+            const name = (line.text || '').trim()
+            const lowConfidence = typeof line.confidence === 'number' && line.confidence < 0.4
+            return {
+              id: genId(),
+              name,
+              original: name,
+              category: categorizeItem(name),
+              quantity: null,
+              note: lowConfidence ? 'Hard to read — please verify.' : null,
+              flagged: lowConfidence,
+              checked: false,
+            }
+          })
           if (items.length === 0) {
             throw new Error('No grocery items found. Try a clearer photo.')
           }
@@ -721,11 +717,11 @@ export function useClaude() {
             throw new Error(`Apple Intelligence unavailable: ${aiCheck.reason}`)
           }
           try {
-            // Returns [{ name, parents? }]. `parents` is a list of dish names
-            // the ingredient belongs to (multiple if shared across dishes).
-            // We mirror the existing "nest" pattern from SuggestionsPanel —
-            // keep the parent dish AS an item, and tag each ingredient with
-            // a "for <Dish>" / "for <DishA>, <DishB>" note.
+            // Returns [{ name, section, parents }] via guided generation.
+            // `parents` lists dish names an ingredient belongs to (structured,
+            // so direction can't reverse). We mirror the existing "nest"
+            // pattern — the dish stays as a header item (empty parents) and
+            // each ingredient gets a "for <Dish>" note.
             const parsed = await parseFreeFormText(text.trim())
             if (parsed.length === 0) {
               throw new Error('Apple Intelligence returned no items — try rephrasing')
@@ -738,7 +734,9 @@ export function useClaude() {
                 id: genId(),
                 name: entry.name,
                 original: entry.name,
-                category: categorizeItem(entry.name),
+                category: entry.section && entry.section !== 'Other'
+                  ? entry.section
+                  : categorizeItem(entry.name),
                 quantity: null,
                 note,
                 flagged: false,
