@@ -1,4 +1,5 @@
 import { normalizeCategory } from './categories.js'
+import { normalizeItemName } from './canonicalNames.js'
 
 function genId() {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
@@ -38,7 +39,7 @@ export function parseClaudeResponse(text) {
     .filter(i => i && typeof i.name === 'string' && i.name.trim())
     .map(i => ({
       id: typeof i.id === 'string' && i.id ? i.id : genId(),
-      name: i.name.trim(),
+      name: normalizeItemName(i.name.trim()),
       original: typeof i.original === 'string' ? i.original : i.name.trim(),
       category: normalizeCategory(i.category),
       quantity: i.quantity ? String(i.quantity) : null,

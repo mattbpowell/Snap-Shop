@@ -4,6 +4,7 @@ import { parseClaudeResponse, genId } from '../utils/parseResponse.js'
 import { preprocessImageForVision, blobToBase64 } from '../utils/imagePreprocessor.js'
 import { categorizeItem } from '../utils/categorizer.js'
 import { CATEGORIES } from '../utils/categories.js'
+import { normalizeItemName } from '../utils/canonicalNames.js'
 import { canRecognizeTextOnDevice, recognizeTextOnDevice } from '../lib/platform.js'
 import { filterOcrLines } from '../utils/ocrFilter.js'
 import {
@@ -646,20 +647,23 @@ export function useClaude() {
               // (A modest drop is fine: real lists do contain some noise.)
               const enoughSurvived = parsed.length >= Math.ceil(filtered.length * 0.6)
               if (parsed.length > 0 && enoughSurvived) {
-                const items = parsed.map(p => ({
-                  id: genId(),
-                  name: p.name,
-                  original: p.name,
-                  // Trust the model's section unless it punted to "Other",
-                  // where the deterministic keyword categorizer may still win.
-                  category: p.section && p.section !== 'Other'
-                    ? p.section
-                    : categorizeItem(p.name),
-                  quantity: null,
-                  note: null,
-                  flagged: false,
-                  checked: false,
-                }))
+                const items = parsed.map(p => {
+                  const name = normalizeItemName(p.name)
+                  return {
+                    id: genId(),
+                    name,
+                    original: p.name,
+                    // Trust the model's section unless it punted to "Other",
+                    // where the deterministic keyword categorizer may still win.
+                    category: p.section && p.section !== 'Other'
+                      ? p.section
+                      : categorizeItem(name),
+                    quantity: null,
+                    note: null,
+                    flagged: false,
+                    checked: false,
+                  }
+                })
                 return { ok: true, items, blurWarning }
               }
               console.log(
@@ -672,15 +676,18 @@ export function useClaude() {
             }
           }
 
-          // Fallback: raw OCR text + deterministic categorize (AI unavailable
-          // or it errored). Low-confidence lines get flagged for review.
+          // Fallback: raw OCR text + canonical lookup + deterministic
+          // categorize (AI unavailable or it errored). The canonical lookup
+          // is the only normalization that runs here, so it matters most.
+          // Low-confidence lines get flagged for review.
           const items = filtered.map(line => {
-            const name = (line.text || '').trim()
+            const raw = (line.text || '').trim()
+            const name = normalizeItemName(raw)
             const lowConfidence = typeof line.confidence === 'number' && line.confidence < 0.4
             return {
               id: genId(),
               name,
-              original: name,
+              original: raw,
               category: categorizeItem(name),
               quantity: null,
               note: lowConfidence ? 'Hard to read — please verify.' : null,
@@ -732,16 +739,17 @@ export function useClaude() {
               throw new Error('Apple Intelligence returned no items — try rephrasing')
             }
             const items = parsed.map(entry => {
+              const name = normalizeItemName(entry.name)
               const note = entry.parents && entry.parents.length > 0
                 ? `for ${entry.parents.join(', ')}`
                 : null
               return {
                 id: genId(),
-                name: entry.name,
+                name,
                 original: entry.name,
                 category: entry.section && entry.section !== 'Other'
                   ? entry.section
-                  : categorizeItem(entry.name),
+                  : categorizeItem(name),
                 quantity: null,
                 note,
                 flagged: false,
