@@ -6,6 +6,39 @@ normalization end-to-end.
 
 ---
 
+## 0. Template / decoration filtering → solve via the multimodal cloud path
+
+**Decision (2026-05-29):** stop maintaining hardcoded word lists for
+pre-printed planner/stationery furniture (HAPPINESS, MAGIC, CREATIVITY,
+SMILES, BELIEVE, TRUST, LOVE — the colored margin tabs on fridge planners).
+
+**Why the current approach is a stopgap:** the on-device path is text-only.
+Apple Vision flattens the photo into plain strings before anything reasons
+about it, so the Foundation Models step never sees color, rotation, or
+print-vs-handwriting — it can't tell a printed tab from a written word. We're
+left filtering by word list (`DECORATIVE_SOLO_WORDS` in
+`src/utils/ocrFilter.js`), which is whack-a-mole: every planner has different
+labels.
+
+**The right fix:** the multimodal Claude path (Cloudflare Worker + AI Gateway,
+already in the research build queue). A model that *sees the image* just knows
+"those are pre-printed magnet tabs, ignore them" — no word list, generalizes
+to any template. When that path is built, fold template/decoration rejection
+into its vision prompt and revisit (shrink or retire) the
+`DECORATIVE_SOLO_WORDS` hack.
+
+Considered and deferred:
+- **Orientation heuristic** (drop tall-narrow / vertically-printed text via
+  Vision's bounding box). Cheaper, on-device, intrinsic to text shape (not
+  position). Viable fallback if the cloud path slips, but the multimodal
+  approach is strictly better, so not building it now.
+- **Background-color sampling** in the Swift plugin (saturated band = tab).
+  Heavier, misfires on colorful packaging.
+
+Until the cloud path ships, the word-list stopgap stays as-is.
+
+---
+
 ## 1. Parse-time animation — make it feel 2035 not 2020
 
 Today: a small green spinner with the text "Reading list…" / "Cleaning up…".
