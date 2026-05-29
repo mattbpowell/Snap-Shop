@@ -69,9 +69,9 @@ Process EVERY numbered line. Completeness matters most — do not skip, merge, o
 
 For each line:
 - If it could be something a person buys at a store (food, household, pharmacy, hardware, beverages, etc.), include it: fix obvious handwriting/OCR spelling errors and assign the correct store section. Even if a line is short, unfamiliar, or only probably an item, KEEP it.
-- Omit a line ONLY when you are certain it is not a purchasable item — decorative or motivational words printed on stationery (HAPPINESS, MAGIC, CREATIVITY, JOY, SMILES, GRATITUDE), page headers (PLANNER, MENU, LIST), bare calendar words, prices, or scribbles.
+- Omit a line when it is NOT a purchasable product. In particular, drop a line that is a single abstract word naming a feeling, virtue, mood, or concept rather than a physical object — e.g. happiness, love, believe, trust, magic, creativity, joy, hope, peace, gratitude, kindness, courage, focus, balance. These are decorative labels printed along the edges of planners and stationery, not shopping items. Also drop page headers (PLANNER, MENU, LIST), bare calendar words, prices, and scribbles.
 
-Do not invent items not present in the input. When in doubt, keep the line — the user can delete extras.`
+Distinguish a lone abstract word (drop it) from a real product that happens to contain such a word (keep it): "Love" alone is decoration, but "Love Corn" or "I Can't Believe It's Not Butter" are products. When in doubt about a concrete PRODUCT, keep it — the user can delete extras.`
 
 /**
  * Clean an array of raw OCR strings into structured grocery items.

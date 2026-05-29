@@ -32,6 +32,21 @@ const STOP_WORDS = new Set([
   'dec', 'december',
 ])
 
+// Abstract / motivational words that show up as decorative labels printed on
+// planners and stationery (e.g. the colored margin tabs on a fridge planner).
+// These are matched ONLY when a line is exactly one of these words — never as
+// a sub-token — so real multi-word products that happen to contain one
+// ("I Can't Believe It's Not Butter", "Magic Shell", "Love Corn") survive.
+const DECORATIVE_SOLO_WORDS = new Set([
+  'happiness', 'happy', 'magic', 'creativity', 'create', 'imagine',
+  'smiles', 'smile', 'believe', 'trust', 'love', 'joy', 'hope', 'peace',
+  'dream', 'dreams', 'gratitude', 'grateful', 'blessed', 'kindness',
+  'courage', 'inspire', 'inspiration', 'faith', 'wonder', 'shine',
+  'focus', 'motivation', 'positivity', 'calm', 'balance', 'wellness',
+  'mindful', 'mindfulness', 'breathe', 'grow', 'flourish', 'gratitude',
+  'strength', 'harmony', 'serenity', 'bliss', 'thrive',
+])
+
 export function filterOcrLines(lines) {
   if (!Array.isArray(lines)) return []
   return lines.filter(isLikelyItem)
@@ -47,6 +62,10 @@ function isLikelyItem(line) {
   const tokens = text.toLowerCase().split(/[^a-z]+/).filter(Boolean)
   if (tokens.length === 0) return false
   if (tokens.some(t => STOP_WORDS.has(t))) return false
+
+  // Lone abstract/motivational word (planner margin label) → drop. Only when
+  // it's the WHOLE line, so multi-word products containing the word survive.
+  if (tokens.length === 1 && DECORATIVE_SOLO_WORDS.has(tokens[0])) return false
 
   return true
 }
