@@ -1,29 +1,17 @@
 /**
- * Capacitor configuration for Snap & Shop.
+ * Snap & Shop — Capacitor configuration
  *
- * Generated for Phase 2 of the build sequence (Capacitor wrap → first iOS build).
- * The bundle ID matches the research-recommended app identifier so RevenueCat,
- * StoreKit 2, and the App Store Connect record will all line up later.
+ * Bring-up sequence (run from this directory):
+ *   npm install
+ *   npm run build              # populates dist/
+ *   npx cap add ios            # generates ios/App
+ *   npx cap sync ios           # copies dist/ into ios/App/App/public
+ *   npx cap open ios           # opens Xcode 26
  *
- * After installing dependencies (`npm install`), the standard bring-up sequence is:
- *
- *   npx cap init "Snap & Shop" com.snapandshop.app --web-dir dist  # (no-op if already initialized via this file)
- *   npm run build                                                  # Vite → dist/
- *   npx cap add ios                                                # creates ios/App
- *   npx cap sync ios                                               # copies dist/ into ios/App/public/
- *   npx cap open ios                                               # opens Xcode 26
- *
- * Server config: only set `server.url` for live-reload during dev. In production
- * the bundle is shipped from `dist/` (web-dir), so server config is unset.
- *
- * Plugin notes (Phases 3+):
- *   - VisionOCR — local Swift plugin lives at ios/App/App/Plugins/VisionOCR/
- *     and registers itself via the CAP_PLUGIN macro; no JS-side config here.
- *   - @capgo/capacitor-llm — Apple Foundation Models; Phase 4. Configured at
- *     runtime via `CapgoLLM.setModel({ path: 'Apple Intelligence' })`.
- *   - @revenuecat/purchases-capacitor — Phase 6. Configured at runtime with
- *     the public RC API key.
+ * In Xcode: set the signing team, deployment target = iOS 26.0, and run on a
+ * physical device (Vision framework's handwriting OCR is unreliable on Simulator).
  */
+
 import type { CapacitorConfig } from '@capacitor/cli'
 
 const config: CapacitorConfig = {
@@ -31,15 +19,12 @@ const config: CapacitorConfig = {
   appName: 'Snap & Shop',
   webDir: 'dist',
   ios: {
-    // iOS 26 minimum (Apple Intelligence + Vision framework grocery vocab).
-    // Older devices fall back to the cloud path via the CF Worker proxy.
-    contentInset: 'automatic',
+    // 'never' — our CSS env(safe-area-inset-*) owns all spacing math.
+    // 'automatic' double-applies insets at scroll-end, which made the
+    // bottom bar appear to grow in height once the page bottomed out.
+    contentInset: 'never',
   },
-  // No server.url in production — leave commented for dev live-reload:
-  // server: {
-  //   url: 'http://192.168.1.100:5173',
-  //   cleartext: true,
-  // },
+  // server: { url: 'http://<lan-ip>:5173', cleartext: true },  // dev live-reload only
 }
 
 export default config

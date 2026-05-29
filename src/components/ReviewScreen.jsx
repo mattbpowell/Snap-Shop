@@ -93,7 +93,13 @@ export function ReviewScreen({ list, onRename, onDelete, onAddItem, onStart, onD
   }
 
   return (
-    <div className="max-w-xl mx-auto px-4 py-6 pb-44">
+    <div
+      className="max-w-xl mx-auto px-4"
+      style={{
+        paddingTop: 'calc(env(safe-area-inset-top, 0px) + 1.5rem)',
+        paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 13rem)',
+      }}
+    >
       <header className="mb-5 flex items-end justify-between gap-3">
         <div className="min-w-0">
           <h2 className="text-xl font-semibold tracking-tight text-neutral-900">Review your list</h2>
@@ -198,7 +204,10 @@ export function ReviewScreen({ list, onRename, onDelete, onAddItem, onStart, onD
         </div>
       )}
 
-      <div className="fixed bottom-[88px] left-0 right-0 p-4 bg-white/90 backdrop-blur border-t border-neutral-200/70 shadow-dock">
+      <div
+        className="fixed left-0 right-0 p-4 bg-white/90 backdrop-blur border-t border-neutral-200/70 shadow-dock"
+        style={{ bottom: 'calc(env(safe-area-inset-bottom, 0px) + 88px)' }}
+      >
         <div className="max-w-xl mx-auto">
           <button
             type="button"

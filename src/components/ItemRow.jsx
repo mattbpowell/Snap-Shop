@@ -41,6 +41,9 @@ export function ItemRow({
   }
 
   if (mode === 'review') {
+    // Suggestions route through Apple Foundation Models on native iOS,
+    // through the cloud (Anthropic) or Ollama on web. The hook decides
+    // which to call at runtime; the button is always shown.
     const canSuggest = typeof onSuggest === 'function' && !isEditing
     return (
       <div className="border-b border-neutral-100 last:border-b-0">

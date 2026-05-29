@@ -20,6 +20,10 @@ export default function App() {
   } = useList()
 
   const [screen, setScreen] = useState('upload')
+  // Bumped every time the Scan tab is tapped — UploadScreen watches this and
+  // opens the camera/photo picker when it changes. Lets the bottom-bar Scan
+  // button act as a one-tap capture entry point.
+  const [scanTrigger, setScanTrigger] = useState(0)
 
   useEffect(() => {
     if (screen === 'upload' && list && list.items.length) return
@@ -47,7 +51,12 @@ export default function App() {
   }
 
   const handleNavigate = (target) => {
-    if (target === 'upload') setScreen('upload')
+    if (target === 'upload') {
+      // Scan tab is "capture", not just "go to upload" — always navigate to
+      // upload and bump the trigger so UploadScreen opens the camera.
+      setScreen('upload')
+      setScanTrigger(t => t + 1)
+    }
     else if (target === 'review' && list?.items?.length) setScreen('review')
     else if (target === 'store' && list?.items?.length) setScreen('store')
   }
@@ -63,6 +72,7 @@ export default function App() {
           existingList={list}
           onResume={handleResume}
           history={history}
+          scanTrigger={scanTrigger}
         />
         <BottomNav screen="upload" list={list} onNavigate={handleNavigate} />
       </>

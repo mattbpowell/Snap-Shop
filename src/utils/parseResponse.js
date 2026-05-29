@@ -1,10 +1,4 @@
-// The canonical ParsedItem normalizer in src/lib/parsedItem.js handles
-// category resolution alongside `section`, `flagged`/`needsConfirmation`,
-// etc. There's a circular import here (parsedItem.js imports `genId` from
-// this file) — ES modules handle this fine because both `genId` and
-// `normalizeParsedItem` are referenced only at call time, not during module
-// top-level evaluation, and ES module bindings are live.
-import { normalizeParsedItem } from '../lib/parsedItem.js'
+import { normalizeCategory } from './categories.js'
 
 function genId() {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
@@ -34,13 +28,7 @@ function extractJsonObject(text) {
   return null
 }
 
-/**
- * Parse a Claude (or local-model) JSON response into the canonical ParsedItem
- * shape. Drops crossed-out items by default — that's the historical UX:
- * the cloud prompt instructs the model to omit them, and the on-device path
- * sets `crossedOut: true` if it surfaces them at all.
- */
-export function parseClaudeResponse(text, { dropCrossedOut = true } = {}) {
+export function parseClaudeResponse(text) {
   const obj = extractJsonObject(text)
   if (!obj || typeof obj !== 'object') {
     return { ok: false, error: 'Could not parse model output.' }
@@ -48,8 +36,16 @@ export function parseClaudeResponse(text, { dropCrossedOut = true } = {}) {
   const rawItems = Array.isArray(obj.items) ? obj.items : []
   const items = rawItems
     .filter(i => i && typeof i.name === 'string' && i.name.trim())
-    .map(i => normalizeParsedItem(i))
-    .filter(i => dropCrossedOut ? !i.crossedOut : true)
+    .map(i => ({
+      id: typeof i.id === 'string' && i.id ? i.id : genId(),
+      name: i.name.trim(),
+      original: typeof i.original === 'string' ? i.original : i.name.trim(),
+      category: normalizeCategory(i.category),
+      quantity: i.quantity ? String(i.quantity) : null,
+      note: i.note ? String(i.note) : null,
+      flagged: Boolean(i.flagged),
+      checked: false
+    }))
   return {
     ok: true,
     items,

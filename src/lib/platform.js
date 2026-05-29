@@ -21,8 +21,10 @@
  *   - isNative()          → true on Capacitor (iOS/Android); false on web/PWA
  *   - keepScreenAwake()   → returns a release() function; works on web Wake
  *                           Lock and Capacitor KeepAwake transparently
+ *   - canRecognizeTextOnDevice()  → true on iOS (Apple Vision available)
+ *   - recognizeTextOnDevice(b64)  → on-device handwriting OCR via Vision
  *
- * Phases 3+ will add: takePhoto(), recognizeText(), normalizeWithLLM(), etc.
+ * Phases 4+ will add: normalizeWithLLM() (Foundation Models), etc.
  * Keeping these inside platform.js means UI components stay platform-agnostic.
  */
 
@@ -62,7 +64,7 @@ export function getPlatform() {
  * multiple times. If neither path is supported, returns a no-op release().
  *
  * Native path (Capacitor):
- *   `@capacitor/keep-awake` — system-level lock; survives app foreground state.
+ *   `@capacitor-community/keep-awake` — system-level lock; survives app foreground state.
  *
  * Web path:
  *   Screen Wake Lock API. Note: web wake locks are released automatically
@@ -74,7 +76,7 @@ export async function keepScreenAwake() {
   // ── Capacitor (iOS/Android) ──
   if (isNative()) {
     try {
-      const mod = await import('@capacitor/keep-awake')
+      const mod = await import('@capacitor-community/keep-awake')
       if (mod?.KeepAwake?.keepAwake) {
         await mod.KeepAwake.keepAwake()
         return async () => {
@@ -83,7 +85,7 @@ export async function keepScreenAwake() {
       }
     } catch (e) {
       // Plugin not installed yet — fall through to web path / no-op.
-      console.warn('[platform] @capacitor/keep-awake unavailable:', e?.message)
+      console.warn('[platform] @capacitor-community/keep-awake unavailable:', e?.message)
     }
   }
 
@@ -103,92 +105,84 @@ export async function keepScreenAwake() {
   return async () => {}
 }
 
-// ── Camera ──────────────────────────────────────────────────────────────────
+// ── On-device OCR (Apple Vision) ────────────────────────────────────────────
 
 /**
- * Capture a photo with the device camera. Returns a `Blob` ready to feed into
- * `preprocessImageForVision()` — the rest of the parse pipeline doesn't care
- * which capture path produced the bytes.
- *
- * Native path (Capacitor):
- *   `@capacitor/camera`. Uses the system camera UI, which iOS handles much
- *   better than `<input type=file capture=environment>` inside WKWebView
- *   (per research 2026-05-10 Capacitor Phase 2 notes — the native picker
- *   has saner permission UX, no Safari fullscreen quirk, and on iOS 26+
- *   gets the new privacy-first camera permission prompt for free).
- *
- *   Returns the photo as a Base64-decoded Blob. Source defaults to CAMERA
- *   (a `prompt: true` source-picker would let the user pick photo library,
- *   but we expose `takeFromLibrary()` for that case so the camera button is
- *   one tap, no chooser).
- *
- * Web path:
- *   Returns null. Callers fall back to a hidden `<input type=file>` element,
- *   which is what UploadScreen.jsx already does today. Keeping the web path
- *   as the existing implementation means PWA users see no behavior change.
- *
- * @param {object} [opts]
- * @param {'camera'|'library'} [opts.source='camera']  Where to source the photo.
- * @param {number} [opts.quality=90]                   Native JPEG quality 0-100.
- *                                                     90 is high enough to feed
- *                                                     into the existing
- *                                                     preprocessor without OCR
- *                                                     loss.
- * @returns {Promise<Blob|null>}  Blob on native; null on web (caller falls back).
+ * True if on-device handwriting OCR is available on this platform. Today that
+ * means iOS, where the local `VisionOCR` Capacitor plugin (Apple Vision
+ * framework) is registered. The web/PWA path uses the cloud worker instead —
+ * `canRecognizeTextOnDevice()` lets callers decide which path to take.
  */
-export async function takePhoto({ source = 'camera', quality = 90 } = {}) {
-  if (!isNative()) return null
+export function canRecognizeTextOnDevice() {
+  return isNative() && getPlatform() === 'ios'
+}
 
-  try {
-    const mod = await import('@capacitor/camera')
-    const { Camera, CameraResultType, CameraSource } = mod
-    if (!Camera?.getPhoto) return null
+/**
+ * Run handwriting OCR on a base64-encoded image using Apple Vision.
+ *
+ * Returns an array of recognized lines, each with text, confidence (0–1), and
+ * normalized bounding box (origin bottom-left, width/height in 0–1). Bounding
+ * boxes are kept so the caller can sort by reading order — for two-column
+ * lists, the research file recommends left-column-top-down then
+ * right-column-top-down rather than naive top-to-bottom.
+ *
+ * Throws if called when `canRecognizeTextOnDevice()` is false; callers should
+ * fall back to the cloud path (apiClient → CF Worker → Claude) themselves.
+ */
 
-    const cameraSource = source === 'library' ? CameraSource.Photos : CameraSource.Camera
+import { registerPlugin } from '@capacitor/core'
 
-    const photo = await Camera.getPhoto({
-      quality,
-      allowEditing: false,
-      resultType: CameraResultType.Base64,
-      // Force a portrait/landscape-aware orientation so wide grocery lists
-      // shot landscape don't come back rotated.
-      correctOrientation: true,
-      source: cameraSource,
-      // We let the preprocessor handle resizing — keep native output crisp.
-      // The native plugin will skip a re-encode if `quality === 100`, which
-      // we don't want (saves no bytes and the preprocessor handles size).
-      saveToGallery: false,
-    })
+// Register the VisionOCR proxy once at module load (no dynamic import).
+const VisionOCR = registerPlugin('VisionOCR')
 
-    const base64 = photo?.base64String
-    if (!base64) return null
-
-    const mime = photo.format ? `image/${photo.format}` : 'image/jpeg'
-    return base64ToBlob(base64, mime)
-  } catch (e) {
-    if (e?.message && /User cancelled/i.test(e.message)) {
-      // User backed out of the native camera UI — not an error, return null.
-      return null
-    }
-    console.warn('[platform] takePhoto failed:', e?.message)
-    return null
+export async function recognizeTextOnDevice(imageBase64) {
+  if (!canRecognizeTextOnDevice()) {
+    throw new Error('On-device OCR not available on this platform')
   }
+  const result = await Promise.race([
+    VisionOCR.recognize({ imageBase64 }),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Vision OCR timed out after 30000ms')), 30000)
+    ),
+  ])
+  return result?.lines || []
 }
 
-/** Convenience for "pick from library" without a chooser sheet. */
-export async function takeFromLibrary(opts = {}) {
-  return takePhoto({ ...opts, source: 'library' })
-}
+// ── Native camera / photo picker ────────────────────────────────────────────
 
 /**
- * Decode a Base64 string into a Blob. Pure-JS, no DOM dependencies — this
- * runs in both the WKWebView (iOS Capacitor) and the regular browser.
+ * Capture or pick a photo. On native (iOS/Android) this uses the Capacitor
+ * Camera plugin — far more stable than `<input type="file" capture="environment">`,
+ * which on iOS triggers the Springboard photo capture sheet via WebKit and
+ * occasionally crashes the app on real devices. On web/PWA we return null
+ * and let the caller fall back to the file-input path.
+ *
+ * @param {'camera'|'photos'} source 'camera' to open the camera, 'photos' to
+ *   open the library picker. Defaults to 'camera'.
+ * @returns {Promise<File|null>} A File built from the captured image base64,
+ *   ready to feed into existing pipelines. Or null if not native.
  */
-function base64ToBlob(base64, mime) {
-  const binary = atob(base64)
-  const len = binary.length
-  const bytes = new Uint8Array(len)
-  for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i)
-  return new Blob([bytes], { type: mime })
+export async function takePhotoNative(source = 'camera') {
+  if (!isNative()) return null
+  const { Camera, CameraResultType, CameraSource } = await import('@capacitor/camera')
+  const photo = await Camera.getPhoto({
+    quality: 92,
+    allowEditing: false,
+    resultType: CameraResultType.Base64,
+    source: source === 'photos' ? CameraSource.Photos : CameraSource.Camera,
+    saveToGallery: false,
+    correctOrientation: true,
+    presentationStyle: 'fullscreen',
+  })
+  if (!photo?.base64String) return null
+  const mime = photo.format ? `image/${photo.format.toLowerCase()}` : 'image/jpeg'
+  const bytes = base64ToUint8Array(photo.base64String)
+  return new File([bytes], `photo.${photo.format || 'jpg'}`, { type: mime })
 }
 
+function base64ToUint8Array(b64) {
+  const bin = atob(b64)
+  const out = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
+  return out
+}

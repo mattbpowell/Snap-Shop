@@ -89,7 +89,11 @@ export function InStoreMode({ list, onBack, onToggle, onClearChecked, onNewList 
 
       {/* Sticky progress header */}
       <button
-        className="sticky top-0 z-10 w-full bg-white border-b border-neutral-100 px-4 py-3 text-left active:bg-neutral-50"
+        className="sticky top-0 z-10 w-full bg-white border-b border-neutral-100 px-4 text-left active:bg-neutral-50"
+        style={{
+          paddingTop: 'calc(env(safe-area-inset-top, 0px) + 0.75rem)',
+          paddingBottom: '0.75rem',
+        }}
         onClick={() => setShowCategoryBreakdown(v => !v)}
         aria-label="Toggle category breakdown"
       >

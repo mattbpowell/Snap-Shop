@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { useClaude } from '../hooks/useClaude.js'
 import { usePWAInstallPrompt } from '../hooks/usePWAInstallPrompt.js'
+import { isNative, takePhotoNative } from '../lib/platform.js'
 import { IOSInstallBanner } from './IOSInstallBanner.jsx'
 import { BlurRetakeSheet } from './BlurRetakeSheet.jsx'
-import { isNative, takePhoto, takeFromLibrary } from '../lib/platform.js'
 import {
   CameraIcon,
   ImageIcon,
@@ -14,7 +14,7 @@ import {
   XIcon
 } from './icons.jsx'
 
-export function UploadScreen({ onListReady, existingList, onResume, history }) {
+export function UploadScreen({ onListReady, existingList, onResume, history, scanTrigger = 0 }) {
   const {
     loading,
     status,
@@ -49,21 +49,16 @@ export function UploadScreen({ onListReady, existingList, onResume, history }) {
   }
 
   // Auto-ping once on mount when Ollama is the active provider so the user
-  // sees the connection state immediately.
+  // sees the connection state immediately. Skip on native — Ollama runs on
+  // the dev mac and isn't reachable from the simulator/device, and the
+  // banner is hidden in native mode anyway.
   useEffect(() => {
-    if (provider !== 'ollama') return
+    if (provider !== 'ollama' || isNative()) return
     runPing()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [provider])
   const cameraRef = useRef(null)
   const uploadRef = useRef(null)
-
-  // True when running inside the Capacitor iOS/Android shell. On native we
-  // prefer the system camera UI (`@capacitor/camera`) over a hidden
-  // `<input type=file capture=environment>`, which behaves poorly inside
-  // WKWebView per research 2026-05-10 Phase 2 notes. The hidden inputs stay
-  // mounted as a fallback so a failed native call still has a path forward.
-  const NATIVE_CAPTURE = isNative()
 
   const handleFile = (f) => {
     if (!f) return
@@ -74,30 +69,29 @@ export function UploadScreen({ onListReady, existingList, onResume, history }) {
     setBlurWarning(null)
   }
 
-  /**
-   * Native-aware capture handler. When Capacitor is present, route through
-   * `takePhoto()` / `takeFromLibrary()` and synthesize a File from the Blob
-   * so downstream code (which currently checks `file?.name`) keeps working.
-   * On the web, fall through to the hidden file input — same as before.
-   */
-  const captureNative = async (source /* 'camera' | 'library' */) => {
-    if (!NATIVE_CAPTURE) {
-      const ref = source === 'library' ? uploadRef : cameraRef
-      ref.current?.click()
-      return
-    }
+  // Native iOS / Android: use Capacitor Camera (stable, native sheet). On
+  // web/PWA the file input is the right path. Errors (user cancel, perms
+  // denied) just no-op the picker.
+  const openNativePicker = async (source) => {
     try {
-      const blob = source === 'library' ? await takeFromLibrary() : await takePhoto()
-      if (!blob) return  // user cancelled
-      const ext = (blob.type.split('/')[1] || 'jpg').toLowerCase()
-      const synthFile = new File([blob], `snap-${Date.now()}.${ext}`, { type: blob.type })
-      handleFile(synthFile)
-    } catch {
-      // Last-resort fallback to the web input on any unexpected error.
-      const ref = source === 'library' ? uploadRef : cameraRef
-      ref.current?.click()
+      const f = await takePhotoNative(source)
+      if (f) handleFile(f)
+    } catch (e) {
+      // 'User cancelled photos app' / etc. — nothing to do.
+      if (e?.message && !/cancel/i.test(e.message)) {
+        console.log('[UploadScreen] takePhotoNative error:', e.message)
+      }
     }
   }
+
+  // Tapping Scan in the bottom nav increments scanTrigger; open the camera
+  // (or file picker on web) immediately. Skip the initial mount (trigger=0).
+  useEffect(() => {
+    if (scanTrigger === 0) return
+    if (isNative()) openNativePicker('camera')
+    else cameraRef.current?.click()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scanTrigger])
 
   const clearFile = () => {
     if (preview) URL.revokeObjectURL(preview)
@@ -140,13 +134,20 @@ export function UploadScreen({ onListReady, existingList, onResume, history }) {
     setPendingItems(null)
     setBlurWarning(null)
     clearFile()
-    captureNative('camera')
+    if (isNative()) openNativePicker('camera')
+    else cameraRef.current?.click()
   }
 
   const canSubmit = (file || text.trim()) && !loading
 
   return (
-    <div className="max-w-xl mx-auto px-5 py-8 pb-44">
+    <div
+      className="max-w-xl mx-auto px-5"
+      style={{
+        paddingTop: 'calc(env(safe-area-inset-top, 0px) + 2rem)',
+        paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 13rem)',
+      }}
+    >
       <header className="mb-8 flex items-center gap-3">
         <span className="inline-flex w-10 h-10 rounded-xl bg-brand-600 text-white items-center justify-center shadow-soft">
           <LogoMark size={22} strokeWidth={1.8} />
@@ -183,7 +184,7 @@ export function UploadScreen({ onListReady, existingList, onResume, history }) {
         </button>
       )}
 
-      {provider === 'ollama' && (() => {
+      {provider === 'ollama' && !isNative() && (() => {
         const r = pingState.result
         const pending = pingState.status === 'pending'
         const ok = !pending && r?.ok
@@ -259,7 +260,7 @@ export function UploadScreen({ onListReady, existingList, onResume, history }) {
         )
       })()}
 
-      {provider === 'anthropic' && (
+      {provider === 'anthropic' && !isNative() && (
         <div className="mb-6 p-3 rounded-xl bg-neutral-50 border border-neutral-200 text-sm text-neutral-600 flex items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-brand-500 flex-none" />
           <span className="flex-1">
@@ -308,7 +309,7 @@ export function UploadScreen({ onListReady, existingList, onResume, history }) {
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
-                onClick={() => captureNative('camera')}
+                onClick={() => isNative() ? openNativePicker('camera') : cameraRef.current?.click()}
                 className="btn-secondary px-3 py-3 rounded-xl"
               >
                 <CameraIcon size={18} />
@@ -316,7 +317,7 @@ export function UploadScreen({ onListReady, existingList, onResume, history }) {
               </button>
               <button
                 type="button"
-                onClick={() => captureNative('library')}
+                onClick={() => isNative() ? openNativePicker('photos') : uploadRef.current?.click()}
                 className="btn-secondary px-3 py-3 rounded-xl"
               >
                 <ImageIcon size={18} />
@@ -377,7 +378,10 @@ export function UploadScreen({ onListReady, existingList, onResume, history }) {
         </div>
       )}
 
-      <div className="fixed bottom-[88px] left-0 right-0 p-4 bg-white/90 backdrop-blur border-t border-neutral-200/70 shadow-dock">
+      <div
+        className="fixed left-0 right-0 p-4 bg-white/90 backdrop-blur border-t border-neutral-200/70 shadow-dock"
+        style={{ bottom: 'calc(env(safe-area-inset-bottom, 0px) + 88px)' }}
+      >
         <div className="max-w-xl mx-auto">
           <button
             type="button"

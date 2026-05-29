@@ -1,9 +1,17 @@
 import { useCallback, useState } from 'react'
 import { callClaude as _callClaudeAPI, USE_WORKER } from '../lib/apiClient.js'
-import { parseClaudeResponse } from '../utils/parseResponse.js'
+import { parseClaudeResponse, genId } from '../utils/parseResponse.js'
 import { preprocessImageForVision, blobToBase64 } from '../utils/imagePreprocessor.js'
 import { categorizeItem } from '../utils/categorizer.js'
 import { CATEGORIES } from '../utils/categories.js'
+import { canRecognizeTextOnDevice, recognizeTextOnDevice } from '../lib/platform.js'
+import { filterOcrLines } from '../utils/ocrFilter.js'
+import {
+  checkAppleIntelligence,
+  spellCheckLines,
+  suggestSpecificItems,
+  parseFreeFormText,
+} from '../lib/onDeviceLLM.js'
 import {
   GROCERY_SYSTEM_PROMPT,
   OLLAMA_NORMALIZE_PROMPT,
@@ -506,6 +514,24 @@ export function useClaude() {
     const noteHint = context.note ? ` (user note: "${context.note.trim()}")` : ''
     const userPrompt = `Suggest specific grocery items for: "${trimmed}"${noteHint}`
 
+    // Native iOS: prefer Apple Foundation Models when available so the
+    // Specify feature works without any network round-trip and without a
+    // configured cloud key. Categories aren't returned by the local LLM —
+    // we run each suggestion through the deterministic JS categorizer.
+    const aiCheck = await checkAppleIntelligence()
+    if (aiCheck.ok) {
+      try {
+        const list = await suggestSpecificItems(trimmed, context.note || '')
+        const originalLower = trimmed.toLowerCase()
+        return list
+          .filter(s => s.name.toLowerCase() !== originalLower)
+          .map(s => ({ name: s.name, category: categorizeItem(s.name) }))
+      } catch (e) {
+        console.log('[suggestExpansions] AppleLLM failed, falling back:', e?.message)
+        // fall through to cloud / ollama path
+      }
+    }
+
     let raw
     if (PROVIDER === 'anthropic') {
       raw = await _callClaudeAPI({
@@ -571,11 +597,101 @@ export function useClaude() {
       let blurWarning = null
 
       if (file) {
-        const preprocessed = await preprocessImageForVision(file)
-        if (preprocessed.tooBlurry) {
-          blurWarning = 'Image may be blurry — results might be incomplete. Try a clearer photo.'
+        setStatus('Preparing photo…')
+
+        // Always try the canvas resize / WebP preprocessing first — it keeps
+        // the base64 we ship across Capacitor's bridge to ~50–200KB instead
+        // of multi-MB. createImageBitmap can hang on certain HDR JPEG
+        // variants under iOS WebKit, so we wrap it in a 10s timeout and
+        // fall back to the raw blob if it doesn't complete in time.
+        let base64
+        try {
+          const preprocessed = await Promise.race([
+            preprocessImageForVision(file),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('preprocess-timeout')), 10000)
+            ),
+          ])
+          if (preprocessed.tooBlurry) {
+            blurWarning = 'Image may be blurry — results might be incomplete. Try a clearer photo.'
+          }
+          base64 = await blobToBase64(preprocessed.blob)
+        } catch (e) {
+          console.log('[parseList] preprocess failed, using raw blob:', e?.message)
+          base64 = await blobToBase64(file)
         }
-        const base64 = await blobToBase64(preprocessed.blob)
+
+        // ── Native iOS: Apple Vision OCR → optional Apple Foundation Models
+        // normalization → deterministic categorize. Fully on-device. The
+        // Foundation Models step is gated on availability (iOS 26 + Apple
+        // Intelligence enabled); on older hardware we skip it and fall back
+        // to raw OCR + the heuristic noise filter.
+        if (canRecognizeTextOnDevice()) {
+          setStatus('Reading text…')
+          const ocrLines = await recognizeTextOnDevice(base64)
+          const filtered = filterOcrLines(ocrLines)
+          if (filtered.length === 0) {
+            throw new Error('No text recognized in image. Try a clearer photo.')
+          }
+
+          // Apple Intelligence does spell-correction only — it returns one
+          // cleaned string per input line. We pass everything through to the
+          // review screen so the user can delete any obvious noise (page
+          // decoration words like HAPPINESS / CREATIVITY) themselves; the
+          // model isn't asked to classify, only to fix typos.
+          let cleanedTexts = null
+          let llmDiagnostic = null
+          const aiCheck = await checkAppleIntelligence()
+          if (aiCheck.ok) {
+            try {
+              setStatus('Cleaning up…')
+              cleanedTexts = await spellCheckLines(filtered.map(l => l.text))
+            } catch (e) {
+              llmDiagnostic = `Apple Intelligence call failed: ${e?.message || e}`
+            }
+          } else {
+            llmDiagnostic = `Apple Intelligence skipped — ${aiCheck.reason}`
+          }
+          if (llmDiagnostic) {
+            console.log('[parseList]', llmDiagnostic)
+            try {
+              const { Dialog } = await import('@capacitor/dialog')
+              await Dialog.alert({ title: 'On-device LLM', message: llmDiagnostic })
+            } catch (dlgErr) {
+              console.log('[parseList] Dialog.alert failed:', dlgErr?.message)
+            }
+          }
+
+          const items = filtered
+            .map((line, i) => {
+              const original = (line.text || '').trim()
+              const cleanedRaw = cleanedTexts?.[i]
+              // Empty string from the LLM means "drop — not purchasable". A
+              // missing/null entry means we never reached the LLM, so we
+              // keep the OCR text. A non-empty string is the cleaned name.
+              if (cleanedTexts && typeof cleanedRaw === 'string' && cleanedRaw.length === 0) {
+                return null
+              }
+              const cleanedName = (typeof cleanedRaw === 'string' && cleanedRaw.trim()) || original
+              const lowConfidence = typeof line.confidence === 'number' && line.confidence < 0.4
+              return {
+                id: genId(),
+                name: cleanedName,
+                original,
+                category: categorizeItem(cleanedName),
+                quantity: null,
+                note: lowConfidence ? 'Hard to read — please verify.' : null,
+                flagged: lowConfidence,
+                checked: false,
+              }
+            })
+            .filter(Boolean)
+
+          if (items.length === 0) {
+            throw new Error('No grocery items found. Try a clearer photo.')
+          }
+          return { ok: true, items, blurWarning }
+        }
 
         if (PROVIDER === 'anthropic') {
           setStatus('Reading list…')
@@ -586,6 +702,63 @@ export function useClaude() {
       } else {
         setStatus('Building list…')
         const userMsg = { role: 'user', content: `Raw list:\n${text.trim()}` }
+
+        // ── Native iOS: Apple Foundation Models is the canonical text path.
+        // We do NOT fall through to Ollama on native — Ollama lives on the
+        // dev mac and can't be reached from the phone, and the cloud key
+        // isn't configured yet. So if AppleLLM fails on native, surface the
+        // actual error rather than silently routing to a dead endpoint.
+        if (canRecognizeTextOnDevice()) {
+          const aiCheck = await checkAppleIntelligence()
+          if (!aiCheck.ok) {
+            try {
+              const { Dialog } = await import('@capacitor/dialog')
+              await Dialog.alert({
+                title: 'On-device LLM',
+                message: `Apple Intelligence not available — ${aiCheck.reason}`,
+              })
+            } catch {}
+            throw new Error(`Apple Intelligence unavailable: ${aiCheck.reason}`)
+          }
+          try {
+            // Returns [{ name, parents? }]. `parents` is a list of dish names
+            // the ingredient belongs to (multiple if shared across dishes).
+            // We mirror the existing "nest" pattern from SuggestionsPanel —
+            // keep the parent dish AS an item, and tag each ingredient with
+            // a "for <Dish>" / "for <DishA>, <DishB>" note.
+            const parsed = await parseFreeFormText(text.trim())
+            if (parsed.length === 0) {
+              throw new Error('Apple Intelligence returned no items — try rephrasing')
+            }
+            const items = parsed.map(entry => {
+              const note = entry.parents && entry.parents.length > 0
+                ? `for ${entry.parents.join(', ')}`
+                : null
+              return {
+                id: genId(),
+                name: entry.name,
+                original: entry.name,
+                category: categorizeItem(entry.name),
+                quantity: null,
+                note,
+                flagged: false,
+                checked: false,
+              }
+            })
+            return { ok: true, items, blurWarning: null }
+          } catch (e) {
+            console.log('[parseList] AppleLLM text path failed:', e?.message)
+            try {
+              const { Dialog } = await import('@capacitor/dialog')
+              await Dialog.alert({
+                title: 'On-device LLM',
+                message: `Apple Intelligence error: ${e?.message || e}`,
+              })
+            } catch {}
+            throw e
+          }
+        }
+
         if (PROVIDER === 'anthropic') {
           // Flexible prompt: accept either a literal shopping list OR a free-form
           // description (meal plan, recipe rundown, "stuff for tacos all week").

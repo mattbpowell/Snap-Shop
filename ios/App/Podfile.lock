@@ -1,0 +1,40 @@
+PODS:
+  - Capacitor (7.6.4):
+    - CapacitorCordova
+  - CapacitorCamera (7.0.5):
+    - Capacitor
+  - CapacitorCommunityKeepAwake (7.1.0):
+    - Capacitor
+  - CapacitorCordova (7.6.4)
+  - CapacitorDialog (7.0.4):
+    - Capacitor
+
+DEPENDENCIES:
+  - "Capacitor (from `../../node_modules/@capacitor/ios`)"
+  - "CapacitorCamera (from `../../node_modules/@capacitor/camera`)"
+  - "CapacitorCommunityKeepAwake (from `../../node_modules/@capacitor-community/keep-awake`)"
+  - "CapacitorCordova (from `../../node_modules/@capacitor/ios`)"
+  - "CapacitorDialog (from `../../node_modules/@capacitor/dialog`)"
+
+EXTERNAL SOURCES:
+  Capacitor:
+    :path: "../../node_modules/@capacitor/ios"
+  CapacitorCamera:
+    :path: "../../node_modules/@capacitor/camera"
+  CapacitorCommunityKeepAwake:
+    :path: "../../node_modules/@capacitor-community/keep-awake"
+  CapacitorCordova:
+    :path: "../../node_modules/@capacitor/ios"
+  CapacitorDialog:
+    :path: "../../node_modules/@capacitor/dialog"
+
+SPEC CHECKSUMS:
+  Capacitor: 69dc07ebc6bd064747c5e76922f97e4862d9cc23
+  CapacitorCamera: 9e952270be355797f769aa835bb7643a96c871fe
+  CapacitorCommunityKeepAwake: 05c75aab989f60e621870cf03b24a144a5544c30
+  CapacitorCordova: e343e95a672ff73e21a77a80257b52fb609b47d5
+  CapacitorDialog: 508267e5708ab1744288e4d8059336b8dea59abe
+
+PODFILE CHECKSUM: 801cc0690276cacb251be8960a05efffc14cca62
+
+COCOAPODS: 1.16.2
