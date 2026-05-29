@@ -63,24 +63,28 @@ function normalizeItem(raw) {
 
 // ── OCR cleanup ───────────────────────────────────────────────────────────
 
-const OCR_INSTRUCTIONS = `You are cleaning up text recognized from a photo of a handwritten shopping list. The user message is the recognized lines, one item per line.
+const OCR_INSTRUCTIONS = `You are cleaning up text recognized from a photo of a handwritten shopping list. The user message lists the recognized lines, numbered.
+
+Process EVERY numbered line. Completeness matters most — do not skip, merge, or summarize lines. Aim to return roughly the same number of items as input lines.
 
 For each line:
-- If it is something a person could buy at a store (food, household, pharmacy, hardware, etc.), include it — fix obvious handwriting/OCR spelling errors and assign the correct store section.
-- If it is clearly NOT a purchasable item — decorative or motivational words printed on stationery (HAPPINESS, MAGIC, CREATIVITY, JOY, SMILES, GRATITUDE), page headers (PLANNER, MENU, LIST), calendar words, prices, or scribbles — omit it entirely.
+- If it could be something a person buys at a store (food, household, pharmacy, hardware, beverages, etc.), include it: fix obvious handwriting/OCR spelling errors and assign the correct store section. Even if a line is short, unfamiliar, or only probably an item, KEEP it.
+- Omit a line ONLY when you are certain it is not a purchasable item — decorative or motivational words printed on stationery (HAPPINESS, MAGIC, CREATIVITY, JOY, SMILES, GRATITUDE), page headers (PLANNER, MENU, LIST), bare calendar words, prices, or scribbles.
 
-Do not invent items that are not present in the input. These are direct list items, so leave forDishes empty for all of them. Bias toward keeping anything plausibly purchasable; the user can delete extras.`
+Do not invent items not present in the input. When in doubt, keep the line — the user can delete extras.`
 
 /**
  * Clean an array of raw OCR strings into structured grocery items.
  * Returns [{ name, section, parents }] (parents always empty for OCR).
  */
 export async function parseOcrLines(rawTexts) {
-  const prompt = rawTexts.map((t, i) => `${i + 1}. ${t}`).join('\n')
+  const prompt =
+    `Here are ${rawTexts.length} lines recognized from the photo:\n` +
+    rawTexts.map((t, i) => `${i + 1}. ${t}`).join('\n')
   const { items } = await withTimeout(
-    AppleLLM.parseGroceryList({ instructions: OCR_INSTRUCTIONS, prompt }),
+    AppleLLM.cleanGroceryList({ instructions: OCR_INSTRUCTIONS, prompt }),
     PARSE_TIMEOUT_MS,
-    'AppleLLM.parseGroceryList (ocr)'
+    'AppleLLM.cleanGroceryList'
   )
   return (Array.isArray(items) ? items : []).map(normalizeItem).filter(Boolean)
 }

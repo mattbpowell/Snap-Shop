@@ -639,31 +639,36 @@ export function useClaude() {
             try {
               setStatus('Cleaning up…')
               const parsed = await parseOcrLines(filtered.map(l => l.text))
-              const items = parsed.map(p => ({
-                id: genId(),
-                name: p.name,
-                original: p.name,
-                // Trust the model's section unless it punted to "Other",
-                // in which case the deterministic keyword categorizer may
-                // still recognize it.
-                category: p.section && p.section !== 'Other'
-                  ? p.section
-                  : categorizeItem(p.name),
-                quantity: null,
-                note: null,
-                flagged: false,
-                checked: false,
-              }))
-              if (items.length > 0) {
+              // Safety net: the small on-device model sometimes collapses a
+              // long list down to a handful of items. If it returned far
+              // fewer than we fed in, don't trust the cleanup — fall back to
+              // raw OCR below so the user never loses most of their list.
+              // (A modest drop is fine: real lists do contain some noise.)
+              const enoughSurvived = parsed.length >= Math.ceil(filtered.length * 0.6)
+              if (parsed.length > 0 && enoughSurvived) {
+                const items = parsed.map(p => ({
+                  id: genId(),
+                  name: p.name,
+                  original: p.name,
+                  // Trust the model's section unless it punted to "Other",
+                  // where the deterministic keyword categorizer may still win.
+                  category: p.section && p.section !== 'Other'
+                    ? p.section
+                    : categorizeItem(p.name),
+                  quantity: null,
+                  note: null,
+                  flagged: false,
+                  checked: false,
+                }))
                 return { ok: true, items, blurWarning }
               }
-              // Model returned nothing usable — fall through to OCR-only.
+              console.log(
+                `[parseList] AppleLLM returned ${parsed.length}/${filtered.length} items — ` +
+                'too few, using raw OCR'
+              )
+              // else fall through to raw-OCR path below
             } catch (e) {
               console.log('[parseList] AppleLLM OCR cleanup failed, using raw OCR:', e?.message)
-              try {
-                const { Dialog } = await import('@capacitor/dialog')
-                await Dialog.alert({ title: 'On-device LLM', message: `Apple Intelligence error: ${e?.message || e}` })
-              } catch {}
             }
           }
 

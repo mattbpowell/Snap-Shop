@@ -47,6 +47,28 @@ extension GrocerySection {
     }
 }
 
+// Lightweight item for OCR cleanup — no forDishes (a photographed list has no
+// dishes to expand). Fewer fields per element means the small on-device model
+// can reliably enumerate a long list (15+ items) without truncating or
+// collapsing to a salient few.
+@available(iOS 26.0, *)
+@Generable
+struct CleanedItem {
+    @Guide(description: "The cleaned, spell-corrected product name in Title Case. Stay close to what was written — fix only obvious OCR or spelling errors, never substitute a different item.")
+    let name: String
+
+    @Guide(description: "The grocery store section where this item is typically found.")
+    let section: GrocerySection
+}
+
+@available(iOS 26.0, *)
+@Generable
+struct CleanedItemList {
+    @Guide(description: "One entry for every recognized line that is a real shopping item, in the original order.")
+    let items: [CleanedItem]
+}
+
+// Richer item for free-form typed input, where dishes expand into ingredients.
 @available(iOS 26.0, *)
 @Generable
 struct ParsedGroceryItem {
@@ -91,6 +113,7 @@ public class AppleLLMPlugin: CAPPlugin, CAPBridgedPlugin {
     public let jsName = "AppleLLM"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "isAvailable", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "cleanGroceryList", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "parseGroceryList", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "suggestItems", returnType: CAPPluginReturnPromise),
     ]
@@ -112,6 +135,47 @@ public class AppleLLMPlugin: CAPPlugin, CAPBridgedPlugin {
         call.resolve(["available": false, "reason": "FoundationModels requires iOS 26+"])
     }
 
+    @objc func cleanGroceryList(_ call: CAPPluginCall) {
+        guard let prompt = call.getString("prompt"), !prompt.isEmpty else {
+            call.reject("Missing 'prompt'")
+            return
+        }
+        let instructions = call.getString("instructions") ?? ""
+
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, *) {
+            Task {
+                do {
+                    let session = instructions.isEmpty
+                        ? LanguageModelSession()
+                        : LanguageModelSession(instructions: { instructions })
+                    // Generous token budget + low temperature so the model
+                    // faithfully enumerates a long list rather than truncating
+                    // or paraphrasing it down to a few items.
+                    let options = GenerationOptions(temperature: 0.2, maximumResponseTokens: 2048)
+                    let response = try await session.respond(
+                        to: prompt,
+                        generating: CleanedItemList.self,
+                        options: options
+                    )
+                    let items: [[String: Any]] = response.content.items.map { item in
+                        [
+                            "name": item.name,
+                            "section": item.section.displayName,
+                            "forDishes": [String](),
+                        ]
+                    }
+                    call.resolve(["items": items])
+                } catch {
+                    call.reject("Foundation Models error: \(error.localizedDescription)")
+                }
+            }
+            return
+        }
+        #endif
+        call.reject("FoundationModels requires iOS 26+")
+    }
+
     @objc func parseGroceryList(_ call: CAPPluginCall) {
         guard let prompt = call.getString("prompt"), !prompt.isEmpty else {
             call.reject("Missing 'prompt'")
@@ -126,9 +190,11 @@ public class AppleLLMPlugin: CAPPlugin, CAPBridgedPlugin {
                     let session = instructions.isEmpty
                         ? LanguageModelSession()
                         : LanguageModelSession(instructions: { instructions })
+                    let options = GenerationOptions(temperature: 0.3, maximumResponseTokens: 2048)
                     let response = try await session.respond(
                         to: prompt,
-                        generating: ParsedGroceryList.self
+                        generating: ParsedGroceryList.self,
+                        options: options
                     )
                     let items: [[String: Any]] = response.content.items.map { item in
                         [
