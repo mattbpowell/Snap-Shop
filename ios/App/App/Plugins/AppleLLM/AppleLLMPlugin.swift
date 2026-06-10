@@ -1,4 +1,5 @@
 import Capacitor
+import UIKit
 
 #if canImport(FoundationModels)
 import FoundationModels
@@ -114,6 +115,7 @@ public class AppleLLMPlugin: CAPPlugin, CAPBridgedPlugin {
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "isAvailable", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "cleanGroceryList", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "parseImage", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "parseGroceryList", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "suggestItems", returnType: CAPPluginReturnPromise),
     ]
@@ -121,18 +123,73 @@ public class AppleLLMPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func isAvailable(_ call: CAPPluginCall) {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, *) {
+            // `supportsImage` is true on iOS 27+, where Foundation Models
+            // accepts an image attachment directly — letting us hand the
+            // model the photo instead of OCR'ing to text first.
+            var supportsImage = false
+            if #available(iOS 27.0, *) { supportsImage = true }
             switch SystemLanguageModel.default.availability {
             case .available:
-                call.resolve(["available": true, "reason": "available"])
+                call.resolve(["available": true, "reason": "available", "supportsImage": supportsImage])
             case .unavailable(let reason):
-                call.resolve(["available": false, "reason": String(describing: reason)])
+                call.resolve(["available": false, "reason": String(describing: reason), "supportsImage": false])
             @unknown default:
-                call.resolve(["available": false, "reason": "unknown"])
+                call.resolve(["available": false, "reason": "unknown", "supportsImage": false])
             }
             return
         }
         #endif
-        call.resolve(["available": false, "reason": "FoundationModels requires iOS 26+"])
+        call.resolve(["available": false, "reason": "FoundationModels requires iOS 26+", "supportsImage": false])
+    }
+
+    /// iOS 27+: hand the photo to the on-device model directly (no OCR step).
+    /// The model sees layout/color/handwriting, so it natively distinguishes
+    /// printed template furniture (planner margin tabs) from written items —
+    /// the thing the text-only path could never do. Uses the same lightweight
+    /// CleanedItemList @Generable type as the OCR path; forDishes stays empty.
+    @objc func parseImage(_ call: CAPPluginCall) {
+        guard let base64 = call.getString("imageBase64"),
+              let data = Data(base64Encoded: base64),
+              let uiImage = UIImage(data: data),
+              let cgImage = uiImage.cgImage else {
+            call.reject("Invalid image data")
+            return
+        }
+        let instructions = call.getString("instructions") ?? ""
+        let prompt = call.getString("prompt")
+            ?? "Read this photo of a shopping list and extract every written item."
+
+        #if canImport(FoundationModels)
+        if #available(iOS 27.0, *) {
+            Task {
+                do {
+                    let session = instructions.isEmpty
+                        ? LanguageModelSession()
+                        : LanguageModelSession(instructions: { instructions })
+                    let options = GenerationOptions(temperature: 0.2, maximumResponseTokens: 2048)
+                    let response = try await session.respond(
+                        generating: CleanedItemList.self,
+                        options: options
+                    ) {
+                        prompt
+                        Attachment(cgImage)
+                    }
+                    let items: [[String: Any]] = response.content.items.map { item in
+                        [
+                            "name": item.name,
+                            "section": item.section.displayName,
+                            "forDishes": [String](),
+                        ]
+                    }
+                    call.resolve(["items": items])
+                } catch {
+                    call.reject("Foundation Models error: \(error.localizedDescription)")
+                }
+            }
+            return
+        }
+        #endif
+        call.reject("Image input requires iOS 27+")
     }
 
     @objc func cleanGroceryList(_ call: CAPPluginCall) {

@@ -34,18 +34,47 @@ function withTimeout(promise, ms, label) {
 
 export async function checkAppleIntelligence() {
   if (!isNative() || getPlatform() !== 'ios') {
-    return { ok: false, reason: 'not native iOS' }
+    return { ok: false, reason: 'not native iOS', supportsImage: false }
   }
   try {
-    const { available, reason } = await withTimeout(
+    const { available, reason, supportsImage } = await withTimeout(
       AppleLLM.isAvailable(),
       READINESS_TIMEOUT_MS,
       'isAvailable'
     )
-    return { ok: !!available, reason: reason || (available ? 'available' : 'unknown') }
+    return {
+      ok: !!available,
+      reason: reason || (available ? 'available' : 'unknown'),
+      // iOS 27+: the model accepts the photo directly (no OCR step).
+      supportsImage: !!supportsImage,
+    }
   } catch (e) {
-    return { ok: false, reason: `isAvailable threw: ${e?.message || e}` }
+    return { ok: false, reason: `isAvailable threw: ${e?.message || e}`, supportsImage: false }
   }
+}
+
+const IMAGE_INSTRUCTIONS = `You read a photo of a shopping list (handwritten, printed, or a screenshot) and extract the shopping items.
+
+Look at the image directly. Include every item the person actually wrote or listed — fix obvious spelling, assign each a store section.
+
+IGNORE anything that is part of the stationery, template, or background rather than the person's list: pre-printed planner headers and decorative margin labels (e.g. colored tabs reading HAPPINESS, MAGIC, CREATIVITY, BELIEVE, TRUST, LOVE), dates, page furniture, and anything not handwritten/added by the user. Do not invent items. Bias toward keeping real list entries; the user can delete extras.`
+
+/**
+ * iOS 27+ only: hand the photo to the on-device model directly (no OCR).
+ * Returns [{ name, section, parents }] (parents always empty). Throws if the
+ * plugin rejects (e.g. iOS < 27).
+ */
+export async function parseImageOnDevice(imageBase64) {
+  const { items } = await withTimeout(
+    AppleLLM.parseImage({
+      imageBase64,
+      instructions: IMAGE_INSTRUCTIONS,
+      prompt: 'Read this photo of a shopping list and extract every item the person wrote.',
+    }),
+    PARSE_TIMEOUT_MS,
+    'AppleLLM.parseImage'
+  )
+  return (Array.isArray(items) ? items : []).map(normalizeItem).filter(Boolean)
 }
 
 // Normalize one raw plugin item into our shape. `section` is already one of

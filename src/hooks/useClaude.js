@@ -10,6 +10,7 @@ import { filterOcrLines } from '../utils/ocrFilter.js'
 import {
   checkAppleIntelligence,
   parseOcrLines,
+  parseImageOnDevice,
   suggestSpecificItems,
   parseFreeFormText,
 } from '../lib/onDeviceLLM.js'
@@ -625,6 +626,43 @@ export function useClaude() {
         // Intelligence enabled); on older hardware we skip it and fall back
         // to raw OCR + the heuristic noise filter.
         if (canRecognizeTextOnDevice()) {
+          const aiCheck = await checkAppleIntelligence()
+
+          // iOS 27+: hand the photo to the model directly — no OCR step. The
+          // model sees layout, color, and handwriting, so it natively ignores
+          // pre-printed template furniture (planner margin tabs, decorative
+          // labels) that the text-only path could never tell apart from real
+          // items. This is the multimodal win from WWDC 2026.
+          if (aiCheck.ok && aiCheck.supportsImage) {
+            try {
+              setStatus('Reading photo…')
+              const parsed = await parseImageOnDevice(base64)
+              if (parsed.length > 0) {
+                const items = parsed.map(p => {
+                  const name = normalizeItemName(p.name)
+                  return {
+                    id: genId(),
+                    name,
+                    original: p.name,
+                    category: p.section && p.section !== 'Other'
+                      ? p.section
+                      : categorizeItem(name),
+                    quantity: null,
+                    note: null,
+                    flagged: false,
+                    checked: false,
+                  }
+                })
+                return { ok: true, items, blurWarning }
+              }
+              // empty → fall through to the OCR path below
+            } catch (e) {
+              console.log('[parseList] image parse failed, falling back to OCR:', e?.message)
+            }
+          }
+
+          // iOS 26 path (or image parse fell through): Vision OCR → noise
+          // filter → Foundation Models cleanup → deterministic categorize.
           setStatus('Reading text…')
           const ocrLines = await recognizeTextOnDevice(base64)
           const filtered = filterOcrLines(ocrLines)
@@ -632,10 +670,6 @@ export function useClaude() {
             throw new Error('No text recognized in image. Try a clearer photo.')
           }
 
-          // Apple Foundation Models (guided generation) returns clean,
-          // sectioned items directly — spelling fixed, noise dropped, store
-          // section assigned. No loose-JSON parsing, no index alignment.
-          const aiCheck = await checkAppleIntelligence()
           if (aiCheck.ok) {
             try {
               setStatus('Cleaning up…')
