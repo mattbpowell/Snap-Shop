@@ -20,12 +20,14 @@ left filtering by word list (`DECORATIVE_SOLO_WORDS` in
 `src/utils/ocrFilter.js`), which is whack-a-mole: every planner has different
 labels.
 
-**The right fix:** the multimodal Claude path (Cloudflare Worker + AI Gateway,
-already in the research build queue). A model that *sees the image* just knows
-"those are pre-printed magnet tabs, ignore them" — no word list, generalizes
-to any template. When that path is built, fold template/decoration rejection
-into its vision prompt and revisit (shrink or retire) the
-`DECORATIVE_SOLO_WORDS` hack.
+**The right fix (UPDATED 2026-06-10 after WWDC 2026):** on-device image input
+to Foundation Models, shipping in iOS 27. The on-device model now takes the
+photo directly (`Attachment(UIImage)`) and sees the colored tabs / layout, so
+it natively distinguishes printed template furniture from written items — no
+word list, no cloud round-trip. This supersedes the earlier "multimodal Claude
+path via Cloudflare Worker" plan. See `snap-shop-ios27-plan-2026-06-10.md`.
+Retire `DECORATIVE_SOLO_WORDS` from the native path once the iOS 27 image
+parse is solid; keep it only on the iOS 26 OCR-text fallback.
 
 Considered and deferred:
 - **Orientation heuristic** (drop tall-narrow / vertically-printed text via
