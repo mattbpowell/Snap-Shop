@@ -4,28 +4,37 @@
  * Content-based only — no bounding-box / position filtering, since the
  * geometry of "where the noise lives" is a property of the photo, not the
  * grocery list. A page header at the top of one image could be a real first
- * item near the top of another. Anything image-shape-specific belongs in an
- * LLM normalization pass (Phase 4), not a regex.
+ * item near the top of another. Anything image-shape-specific belongs in the
+ * multimodal LLM pass, not a regex.
  *
- * What we filter today:
- *   1. Empty / single-character lines
- *   2. Form-template words that are virtually never grocery items —
- *      weekdays, months, "PLANNER", "AGENDA", "TO DO". Token-level match
- *      so partials like "DAILY PLANNER" get caught even if Vision clipped
- *      the leading characters.
+ * What we do today:
+ *   1. Drop empty / single-character lines.
+ *   2. Drop lines containing form-template words that are virtually never
+ *      part of an item — "PLANNER", "AGENDA", "TO DO", "week". Token-level
+ *      match so partials like "LY PLANNER" get caught even when Vision
+ *      clipped the leading characters.
+ *   3. STRIP calendar words (weekdays, months) out of a line but keep the
+ *      rest — meal plans annotate dishes with days ("Tacos Tuesday",
+ *      "Wed: spaghetti") and the dish must survive as an item. Only if
+ *      nothing meaningful remains does the line drop.
+ *   4. Drop lines that are exactly one decorative/motivational word
+ *      (planner margin tabs).
  */
 
-// Lower-cased, alpha-only — match key is `text.toLowerCase().replace(/[^a-z]/g, '')`.
-const STOP_WORDS = new Set([
-  // Form / planner headers
+// Form / planner furniture — a line containing any of these is template, not
+// an item. Lower-cased, alpha-only token match.
+const FORM_WORDS = new Set([
   'planner', 'menu', 'list', 'schedule', 'agenda', 'goals', 'tasks',
   'reminders', 'note', 'notes', 'today', 'week', 'weekof', 'date',
   'todo', 'shopping', 'grocery', 'groceries',
-  // Weekdays
+])
+
+// Calendar words — these get REMOVED from a line, not the line removed.
+// "Tacos Tuesday" → "Tacos"; a line that is ONLY calendar words drops.
+const CALENDAR_WORDS = new Set([
   'mon', 'monday', 'tue', 'tues', 'tuesday', 'wed', 'wednesday',
   'thu', 'thur', 'thurs', 'thursday', 'fri', 'friday', 'sat', 'saturday',
   'sun', 'sunday',
-  // Months
   'jan', 'january', 'feb', 'february', 'mar', 'march', 'apr', 'april',
   'may', 'jun', 'june', 'jul', 'july', 'aug', 'august',
   'sep', 'sept', 'september', 'oct', 'october', 'nov', 'november',
@@ -43,29 +52,52 @@ const DECORATIVE_SOLO_WORDS = new Set([
   'dream', 'dreams', 'gratitude', 'grateful', 'blessed', 'kindness',
   'courage', 'inspire', 'inspiration', 'faith', 'wonder', 'shine',
   'focus', 'motivation', 'positivity', 'calm', 'balance', 'wellness',
-  'mindful', 'mindfulness', 'breathe', 'grow', 'flourish', 'gratitude',
+  'mindful', 'mindfulness', 'breathe', 'grow', 'flourish',
   'strength', 'harmony', 'serenity', 'bliss', 'thrive',
 ])
 
+const normToken = (w) => w.toLowerCase().replace(/[^a-z]/g, '')
+
+/**
+ * Filter + clean raw OCR lines. Returns the surviving lines with calendar
+ * words stripped from their text (other fields preserved).
+ */
 export function filterOcrLines(lines) {
   if (!Array.isArray(lines)) return []
-  return lines.filter(isLikelyItem)
+  const out = []
+  for (const line of lines) {
+    const cleaned = cleanLine(line)
+    if (cleaned) out.push(cleaned)
+  }
+  return out
 }
 
-function isLikelyItem(line) {
+function cleanLine(line) {
   const text = (line.text || '').trim()
-  if (text.length < 2) return false
+  if (text.length < 2) return null
 
-  // Token-level stop-word match — catches partials like "LY PLANNER" where
-  // OCR clipped the leading characters. Tokenize on whitespace + punctuation;
-  // drop the line if any token is a known form/calendar word.
   const tokens = text.toLowerCase().split(/[^a-z]+/).filter(Boolean)
-  if (tokens.length === 0) return false
-  if (tokens.some(t => STOP_WORDS.has(t))) return false
+  if (tokens.length === 0) return null
+
+  // Form/template furniture → whole line is noise.
+  if (tokens.some(t => FORM_WORDS.has(t))) return null
+
+  // Strip calendar words, keep the remainder ("Tacos Tuesday" → "Tacos").
+  const words = text.split(/\s+/)
+  const kept = words.filter(w => {
+    const n = normToken(w)
+    return n.length > 0 && !CALENDAR_WORDS.has(n)
+  })
+  if (kept.length === 0) return null
+  const strippedText = kept.join(' ').replace(/[\s:;,–-]+$/g, '').trim()
+  if (strippedText.length < 2) return null
+
+  const keptTokens = strippedText.toLowerCase().split(/[^a-z]+/).filter(Boolean)
+  if (keptTokens.length === 0) return null
 
   // Lone abstract/motivational word (planner margin label) → drop. Only when
   // it's the WHOLE line, so multi-word products containing the word survive.
-  if (tokens.length === 1 && DECORATIVE_SOLO_WORDS.has(tokens[0])) return false
+  if (keptTokens.length === 1 && DECORATIVE_SOLO_WORDS.has(keptTokens[0])) return null
 
-  return true
+  return strippedText === text ? line : { ...line, text: strippedText }
 }
