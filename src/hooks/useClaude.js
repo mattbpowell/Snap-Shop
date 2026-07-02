@@ -5,6 +5,7 @@ import { preprocessImageForVision, blobToBase64 } from '../utils/imagePreprocess
 import { categorizeItem } from '../utils/categorizer.js'
 import { CATEGORIES } from '../utils/categories.js'
 import { normalizeItemName } from '../utils/canonicalNames.js'
+import { markDuplicates } from '../utils/duplicates.js'
 import { canRecognizeTextOnDevice, recognizeTextOnDevice } from '../lib/platform.js'
 import { filterOcrLines } from '../utils/ocrFilter.js'
 import {
@@ -640,6 +641,14 @@ export function useClaude() {
               if (parsed.length > 0) {
                 const items = parsed.map(p => {
                   const name = normalizeItemName(p.name)
+                  // Photographed meal plans behave like typed ones: dish
+                  // headers come through plain; generated ingredients carry
+                  // their parent dish(es) as a "for <Dish>" note. Ambiguous
+                  // entries (shorthand, variant choices) come back flagged so
+                  // they land in the double-check section with ✨ suggestions.
+                  const note = p.parents && p.parents.length > 0
+                    ? `for ${p.parents.join(', ')}`
+                    : (p.needsClarification ? 'Double-check — tap ✨ for options' : null)
                   return {
                     id: genId(),
                     name,
@@ -648,12 +657,12 @@ export function useClaude() {
                       ? p.section
                       : categorizeItem(name),
                     quantity: null,
-                    note: null,
-                    flagged: false,
+                    note,
+                    flagged: Boolean(p.needsClarification),
                     checked: false,
                   }
                 })
-                return { ok: true, items, blurWarning }
+                return { ok: true, items: markDuplicates(items), blurWarning }
               }
               // empty → fall through to the OCR path below
             } catch (e) {
@@ -693,12 +702,12 @@ export function useClaude() {
                       ? p.section
                       : categorizeItem(name),
                     quantity: null,
-                    note: null,
-                    flagged: false,
+                    note: p.needsClarification ? 'Double-check — tap ✨ for options' : null,
+                    flagged: Boolean(p.needsClarification),
                     checked: false,
                   }
                 })
-                return { ok: true, items, blurWarning }
+                return { ok: true, items: markDuplicates(items), blurWarning }
               }
               console.log(
                 `[parseList] AppleLLM returned ${parsed.length}/${filtered.length} items — ` +
@@ -732,7 +741,7 @@ export function useClaude() {
           if (items.length === 0) {
             throw new Error('No grocery items found. Try a clearer photo.')
           }
-          return { ok: true, items, blurWarning }
+          return { ok: true, items: markDuplicates(items), blurWarning }
         }
 
         if (PROVIDER === 'anthropic') {
@@ -776,7 +785,7 @@ export function useClaude() {
               const name = normalizeItemName(entry.name)
               const note = entry.parents && entry.parents.length > 0
                 ? `for ${entry.parents.join(', ')}`
-                : null
+                : (entry.needsClarification ? 'Double-check — tap ✨ for options' : null)
               return {
                 id: genId(),
                 name,
@@ -786,11 +795,11 @@ export function useClaude() {
                   : categorizeItem(name),
                 quantity: null,
                 note,
-                flagged: false,
+                flagged: Boolean(entry.needsClarification),
                 checked: false,
               }
             })
-            return { ok: true, items, blurWarning: null }
+            return { ok: true, items: markDuplicates(items), blurWarning: null }
           } catch (e) {
             console.log('[parseList] AppleLLM text path failed:', e?.message)
             try {

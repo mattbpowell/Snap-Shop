@@ -53,23 +53,34 @@ export async function checkAppleIntelligence() {
   }
 }
 
-const IMAGE_INSTRUCTIONS = `You read a photo of a shopping list (handwritten, printed, or a screenshot) and extract the shopping items.
+const IMAGE_INSTRUCTIONS = `You read a photo of a shopping list or meal plan (handwritten on paper or a whiteboard, printed, or a screenshot) and produce the full shopping list.
 
-Look at the image directly. Include every item the person actually wrote or listed — fix obvious spelling, assign each a store section.
+Look at the image directly.
 
-IGNORE anything that is part of the stationery, template, or background rather than the person's list: pre-printed planner headers and decorative margin labels (e.g. colored tabs reading HAPPINESS, MAGIC, CREATIVITY, BELIEVE, TRUST, LOVE), dates, page furniture, and anything not handwritten/added by the user. Do not invent items. Bias toward keeping real list entries; the user can delete extras.`
+IGNORE anything that is part of the stationery, template, or background rather than what the person wrote: pre-printed planner headers, decorative margin labels (e.g. colored tabs reading HAPPINESS, MAGIC, CREATIVITY, BELIEVE, TRUST, LOVE), dates, page furniture. Only what the person actually wrote counts.
+
+For each WRITTEN entry, decide whether it is a shopping ITEM or a DISH/MEAL name:
+- ITEM (e.g. "milk", "eggs", "sriracha", "paper towels"): output it once, cleaned — fix spelling, use Title Case — with forDishes EMPTY.
+- DISH or MEAL (e.g. "Tacos", "Spaghetti", "Smoothies"): output the dish name itself as one entry (forDishes empty, so it stays as a header), AND output 4 to 8 concrete ingredients needed to make that dish, each with forDishes set to that dish's name. Meal plans often annotate dishes with days ("Tacos Tuesday", "Wed: spaghetti") — strip the day words; the dish is "Tacos", not "Tacos Tuesday".
+- An ingredient needed by MULTIPLE written dishes: output it once, with every relevant dish in forDishes.
+
+Each output must be a real, concrete shoppable product with its correct store section. Do not invent items unrelated to what is written. Bias toward keeping real written entries; the user can delete extras.
+
+Set needsClarification=true when the shopper should double-check an entry: personal shorthand (a possessive with a person's name like "Tabby's decaf" — expand to the likely product, e.g. "Tabby's Decaf Coffee", but flag it), a product with meaningfully different variants ("Pickle Chips" could be pickle-flavored chips or hamburger pickles), or hard-to-read handwriting you guessed at. Set it false for clear items and for ingredients you generated for a dish.`
 
 /**
  * iOS 27+ only: hand the photo to the on-device model directly (no OCR).
- * Returns [{ name, section, parents }] (parents always empty). Throws if the
- * plugin rejects (e.g. iOS < 27).
+ * Returns [{ name, section, parents }] — `parents` lists the dish(es) an
+ * ingredient was generated for (empty for literal items and dish headers),
+ * so a photographed meal plan behaves exactly like a typed one. Throws if
+ * the plugin rejects (e.g. iOS < 27).
  */
 export async function parseImageOnDevice(imageBase64) {
   const { items } = await withTimeout(
     AppleLLM.parseImage({
       imageBase64,
       instructions: IMAGE_INSTRUCTIONS,
-      prompt: 'Read this photo of a shopping list and extract every item the person wrote.',
+      prompt: 'Read this photo of a shopping list or meal plan and produce the full shopping list.',
     }),
     PARSE_TIMEOUT_MS,
     'AppleLLM.parseImage'
@@ -79,7 +90,8 @@ export async function parseImageOnDevice(imageBase64) {
 
 // Normalize one raw plugin item into our shape. `section` is already one of
 // our category strings (the Swift enum maps to them exactly); `forDishes` is
-// a guaranteed array.
+// a guaranteed array; `needsClarification` marks entries the shopper should
+// double-check (ambiguous handwriting, personal shorthand, variant choices).
 function normalizeItem(raw) {
   const name = typeof raw?.name === 'string' ? raw.name.trim() : ''
   if (!name) return null
@@ -87,7 +99,7 @@ function normalizeItem(raw) {
   const parents = Array.isArray(raw?.forDishes)
     ? raw.forDishes.map(d => String(d).trim()).filter(Boolean)
     : []
-  return { name, section, parents }
+  return { name, section, parents, needsClarification: Boolean(raw?.needsClarification) }
 }
 
 // ── OCR cleanup ───────────────────────────────────────────────────────────
@@ -100,7 +112,9 @@ For each line:
 - If it could be something a person buys at a store (food, household, pharmacy, hardware, beverages, etc.), include it: fix obvious handwriting/OCR spelling errors and assign the correct store section. Even if a line is short, unfamiliar, or only probably an item, KEEP it.
 - Omit a line when it is NOT a purchasable product. In particular, drop a line that is a single abstract word naming a feeling, virtue, mood, or concept rather than a physical object — e.g. happiness, love, believe, trust, magic, creativity, joy, hope, peace, gratitude, kindness, courage, focus, balance. These are decorative labels printed along the edges of planners and stationery, not shopping items. Also drop page headers (PLANNER, MENU, LIST), bare calendar words, prices, and scribbles.
 
-Distinguish a lone abstract word (drop it) from a real product that happens to contain such a word (keep it): "Love" alone is decoration, but "Love Corn" or "I Can't Believe It's Not Butter" are products. When in doubt about a concrete PRODUCT, keep it — the user can delete extras.`
+Distinguish a lone abstract word (drop it) from a real product that happens to contain such a word (keep it): "Love" alone is decoration, but "Love Corn" or "I Can't Believe It's Not Butter" are products. When in doubt about a concrete PRODUCT, keep it — the user can delete extras.
+
+Set needsClarification=true when the shopper should double-check an entry: personal shorthand (a possessive with a person's name like "Tabby's decaf" — expand to the likely product, e.g. "Tabby's Decaf Coffee", but flag it), a product with meaningfully different variants ("Pickle Chips" could be pickle-flavored chips or hamburger pickles), or a low-confidence reading. Set it false for clear, unambiguous items.`
 
 /**
  * Clean an array of raw OCR strings into structured grocery items.

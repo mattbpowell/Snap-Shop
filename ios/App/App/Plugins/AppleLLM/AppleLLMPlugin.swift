@@ -60,6 +60,9 @@ struct CleanedItem {
 
     @Guide(description: "The grocery store section where this item is typically found.")
     let section: GrocerySection
+
+    @Guide(description: "True when the shopper should double-check this entry: the writing was ambiguous, it is personal shorthand (e.g. a name possessive like \"Tabby's decaf\"), the product has meaningfully different variants to choose between, or you corrected it with low confidence. False for clearly readable, unambiguous items.")
+    let needsClarification: Bool
 }
 
 @available(iOS 26.0, *)
@@ -81,6 +84,9 @@ struct ParsedGroceryItem {
 
     @Guide(description: "If this item is an INGREDIENT needed to make one or more dishes or meals the user named, list those dish names here. Leave this empty for items the user listed directly (e.g. 'milk', 'eggs').")
     let forDishes: [String]
+
+    @Guide(description: "True when the shopper should double-check this entry: the writing was ambiguous, it is personal shorthand (e.g. a name possessive like \"Tabby's decaf\"), the product has meaningfully different variants to choose between, or you corrected it with low confidence. False for clearly readable, unambiguous items and for ingredients you generated for a dish.")
+    let needsClarification: Bool
 }
 
 @available(iOS 26.0, *)
@@ -145,8 +151,12 @@ public class AppleLLMPlugin: CAPPlugin, CAPBridgedPlugin {
     /// iOS 27+: hand the photo to the on-device model directly (no OCR step).
     /// The model sees layout/color/handwriting, so it natively distinguishes
     /// printed template furniture (planner margin tabs) from written items —
-    /// the thing the text-only path could never do. Uses the same lightweight
-    /// CleanedItemList @Generable type as the OCR path; forDishes stays empty.
+    /// the thing the text-only path could never do.
+    ///
+    /// Uses the rich ParsedGroceryItem type (with forDishes) so a photographed
+    /// MEAL PLAN behaves exactly like a typed one: dish names are detected and
+    /// expanded into ingredients, each tagged with the dish it belongs to.
+    /// Literal items come through with forDishes empty.
     @objc func parseImage(_ call: CAPPluginCall) {
         guard let base64 = call.getString("imageBase64"),
               let data = Data(base64Encoded: base64),
@@ -157,33 +167,54 @@ public class AppleLLMPlugin: CAPPlugin, CAPBridgedPlugin {
         }
         let instructions = call.getString("instructions") ?? ""
         let prompt = call.getString("prompt")
-            ?? "Read this photo of a shopping list and extract every written item."
+            ?? "Read this photo of a shopping list or meal plan and produce the full shopping list."
 
         #if canImport(FoundationModels)
         if #available(iOS 27.0, *) {
             Task {
-                do {
-                    let session = instructions.isEmpty
-                        ? LanguageModelSession()
-                        : LanguageModelSession(instructions: { instructions })
-                    let options = GenerationOptions(temperature: 0.2, maximumResponseTokens: 2048)
+                let options = GenerationOptions(temperature: 0.2, maximumResponseTokens: 2048)
+
+                func run(_ session: LanguageModelSession) async throws -> [[String: Any]] {
                     let response = try await session.respond(
-                        generating: CleanedItemList.self,
+                        generating: ParsedGroceryList.self,
                         options: options
                     ) {
                         prompt
                         Attachment(cgImage)
                     }
-                    let items: [[String: Any]] = response.content.items.map { item in
+                    return response.content.items.map { item in
                         [
                             "name": item.name,
                             "section": item.section.displayName,
-                            "forDishes": [String](),
+                            "forDishes": item.forDishes,
+                            "needsClarification": item.needsClarification,
                         ]
                     }
-                    call.resolve(["items": items])
+                }
+
+                do {
+                    let session = instructions.isEmpty
+                        ? LanguageModelSession()
+                        : LanguageModelSession(instructions: { instructions })
+                    let items = try await run(session)
+                    call.resolve(["items": items, "engine": "onDevice"])
                 } catch {
-                    call.reject("Foundation Models error: \(error.localizedDescription)")
+                    // On-device failed (e.g. model assets unavailable). Retry on
+                    // Private Cloud Compute — Apple-run, no keys, free tier.
+                    let pcc = PrivateCloudComputeLanguageModel()
+                    guard pcc.isAvailable else {
+                        call.reject("Foundation Models error: \(error.localizedDescription) (PCC unavailable: \(String(describing: pcc.availability)))")
+                        return
+                    }
+                    do {
+                        let session = instructions.isEmpty
+                            ? LanguageModelSession(model: pcc)
+                            : LanguageModelSession(model: pcc, instructions: { instructions })
+                        let items = try await run(session)
+                        call.resolve(["items": items, "engine": "pcc"])
+                    } catch let pccError {
+                        call.reject("Foundation Models error (on-device: \(error.localizedDescription); PCC: \(pccError.localizedDescription))")
+                    }
                 }
             }
             return
@@ -220,10 +251,41 @@ public class AppleLLMPlugin: CAPPlugin, CAPBridgedPlugin {
                             "name": item.name,
                             "section": item.section.displayName,
                             "forDishes": [String](),
+                            "needsClarification": item.needsClarification,
                         ]
                     }
-                    call.resolve(["items": items])
+                    call.resolve(["items": items, "engine": "onDevice"])
                 } catch {
+                    // On-device failed — retry on Private Cloud Compute (iOS 27+).
+                    if #available(iOS 27.0, *) {
+                        let pcc = PrivateCloudComputeLanguageModel()
+                        if pcc.isAvailable {
+                            do {
+                                let session = instructions.isEmpty
+                                    ? LanguageModelSession(model: pcc)
+                                    : LanguageModelSession(model: pcc, instructions: { instructions })
+                                let options = GenerationOptions(temperature: 0.2, maximumResponseTokens: 2048)
+                                let response = try await session.respond(
+                                    to: prompt,
+                                    generating: CleanedItemList.self,
+                                    options: options
+                                )
+                                let items: [[String: Any]] = response.content.items.map { item in
+                                    [
+                                        "name": item.name,
+                                        "section": item.section.displayName,
+                                        "forDishes": [String](),
+                                        "needsClarification": item.needsClarification,
+                                    ]
+                                }
+                                call.resolve(["items": items, "engine": "pcc"])
+                                return
+                            } catch let pccError {
+                                call.reject("Foundation Models error (on-device: \(error.localizedDescription); PCC: \(pccError.localizedDescription))")
+                                return
+                            }
+                        }
+                    }
                     call.reject("Foundation Models error: \(error.localizedDescription)")
                 }
             }
@@ -258,9 +320,10 @@ public class AppleLLMPlugin: CAPPlugin, CAPBridgedPlugin {
                             "name": item.name,
                             "section": item.section.displayName,
                             "forDishes": item.forDishes,
+                            "needsClarification": item.needsClarification,
                         ]
                     }
-                    call.resolve(["items": items])
+                    call.resolve(["items": items, "engine": "onDevice"])
                 } catch {
                     call.reject("Foundation Models error: \(error.localizedDescription)")
                 }
