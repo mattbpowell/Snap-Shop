@@ -127,6 +127,19 @@ public class AppleLLMPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "suggestItems", returnType: CAPPluginReturnPromise),
     ]
 
+    /// Warm the on-device model as soon as the plugin registers (app start),
+    /// so the user's first scan doesn't pay the full model-load cost inside
+    /// "Cleaning up…". prewarm() is non-blocking; weights load system-wide.
+    override public func load() {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, *) {
+            if case .available = SystemLanguageModel.default.availability {
+                LanguageModelSession().prewarm()
+            }
+        }
+        #endif
+    }
+
     @objc func isAvailable(_ call: CAPPluginCall) {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, *) {
