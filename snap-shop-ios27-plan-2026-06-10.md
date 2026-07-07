@@ -88,3 +88,38 @@ JS keeps one entry point (`parseFromImage`) so the swap is invisible to the UI.
 - MacRumors, "Apple Outlines Major AI and Developer Tool Updates" (2026-06-09)
 - TechCrunch / Engadget WWDC 2026 keynote recaps (2026-06-09)
 - Apple Newsroom, "Apple unveils next generation of Apple Intelligence, Siri AI, and more"
+
+---
+
+## Field notes — 2026-07-02 / 07-07 (first real iOS 27 runs)
+
+Hard-won facts from getting the build onto the iOS 27 simulator and a
+physical iPhone 16 Pro (iOS 27.0):
+
+1. **UIScene is now mandatory.** Apps built with the iOS 27 SDK that use the
+   legacy AppDelegate-only lifecycle hard-crash at launch
+   (EXC_BREAKPOINT in EvaluateRuntimeIssueForNoSceneLifecycleAdoption).
+   Fixed with SceneDelegate + UIApplicationSceneManifest. Capacitor 8's
+   template will have this natively; ours is hand-rolled on Capacitor 7.
+2. **Xcode 27 raised the deployment floor to iOS 15.** Bumped project +
+   Podfile from 14.0 (with a post_install override for Capacitor pods).
+3. **The iOS 27 simulator cannot run Foundation Models inference on a
+   macOS 26 host.** availability lies (.available, supportsImage true) but
+   on-device inference fails (ModelManagerError 1001; SCA error 15 on the
+   text path) and PCC reports assets unavailable. Expect this to require a
+   macOS 27 host. Simulator remains useful for EVERYTHING else (UI, OCR,
+   fallback chain).
+4. **PCC entitlement is fatal-if-missing and personal-team-unprovisionable.**
+   Constructing PrivateCloudComputeLanguageModel without
+   com.apple.developer.private-cloud-compute is a Swift fatal error, and the
+   beta won't put that entitlement in a personal-team profile. Current state:
+   sim-only entitlement file + #if targetEnvironment(simulator) around PCC.
+5. **modelNotReady after OS updates.** Fresh iOS 27 install re-downloads the
+   Apple Intelligence models (~3 GB, needs power + Wi-Fi). availability
+   reports unavailable(modelNotReady) meanwhile; the app correctly falls
+   back to OCR + deterministic categorize. Possible UX nicety later: banner
+   when reason == modelNotReady ("Apple Intelligence still setting up…").
+6. **Fallback chain survived a brutal real-world test** (communal multi-pen
+   whiteboard + events magnet in frame): no crash, editable list. Known
+   fallback limits: raw casing, background print leaks (magnet text) —
+   all things the image model path exists to fix.
