@@ -201,6 +201,12 @@ public class AppleLLMPlugin: CAPPlugin, CAPBridgedPlugin {
                 } catch {
                     // On-device failed (e.g. model assets unavailable). Retry on
                     // Private Cloud Compute — Apple-run, no keys, free tier.
+                    // SIMULATOR-ONLY for now: constructing the PCC model without
+                    // the private-cloud-compute entitlement is a FATAL ERROR in
+                    // this beta, and personal-team device provisioning can't
+                    // include that entitlement yet. Remove this split when the
+                    // capability opens up for the App ID.
+                    #if targetEnvironment(simulator)
                     let pcc = PrivateCloudComputeLanguageModel()
                     guard pcc.isAvailable else {
                         call.reject("Foundation Models error: \(error.localizedDescription) (PCC unavailable: \(String(describing: pcc.availability)))")
@@ -215,6 +221,9 @@ public class AppleLLMPlugin: CAPPlugin, CAPBridgedPlugin {
                     } catch let pccError {
                         call.reject("Foundation Models error (on-device: \(error.localizedDescription); PCC: \(pccError.localizedDescription))")
                     }
+                    #else
+                    call.reject("Foundation Models error: \(error.localizedDescription)")
+                    #endif
                 }
             }
             return
@@ -257,6 +266,9 @@ public class AppleLLMPlugin: CAPPlugin, CAPBridgedPlugin {
                     call.resolve(["items": items, "engine": "onDevice"])
                 } catch {
                     // On-device failed — retry on Private Cloud Compute (iOS 27+).
+                    // SIMULATOR-ONLY: see parseImage for why (entitlement is
+                    // fatal-if-missing and undeliverable to device builds yet).
+                    #if targetEnvironment(simulator)
                     if #available(iOS 27.0, *) {
                         let pcc = PrivateCloudComputeLanguageModel()
                         if pcc.isAvailable {
@@ -286,6 +298,7 @@ public class AppleLLMPlugin: CAPPlugin, CAPBridgedPlugin {
                             }
                         }
                     }
+                    #endif
                     call.reject("Foundation Models error: \(error.localizedDescription)")
                 }
             }

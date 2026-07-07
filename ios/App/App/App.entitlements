@@ -2,12 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Private Cloud Compute access for Foundation Models (iOS 27+).
-	     Free tier per WWDC 2026 for apps under 2M first-time downloads.
-	     NOTE: constructing PrivateCloudComputeLanguageModel without this
-	     entitlement is a FATAL ERROR in the current beta, not a graceful
-	     .unavailable — do not remove while the PCC fallback code exists. -->
-	<key>com.apple.developer.private-cloud-compute</key>
-	<true/>
+	<!-- Base entitlements — used for DEVICE builds.
+	     The Private Cloud Compute entitlement lives in
+	     AppSimulator.entitlements (sim-only) because personal-team
+	     provisioning profiles cannot currently include
+	     com.apple.developer.private-cloud-compute (iOS 27 beta).
+	     When Apple opens that capability for this App ID, move it here and
+	     remove the targetEnvironment(simulator) guards in AppleLLMPlugin. -->
 </dict>
 </plist>

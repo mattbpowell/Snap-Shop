@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- SIMULATOR-ONLY entitlements (no provisioning validation in sim).
+	     Constructing PrivateCloudComputeLanguageModel without this key is a
+	     FATAL ERROR in the current beta — the Swift code only attempts PCC
+	     under targetEnvironment(simulator) to match. -->
+	<key>com.apple.developer.private-cloud-compute</key>
+	<true/>
+</dict>
+</plist>
