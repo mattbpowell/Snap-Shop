@@ -32,6 +32,15 @@ function withTimeout(promise, ms, label) {
   ])
 }
 
+// KILL-SWITCH for direct image input to Foundation Models.
+//
+// iOS 27 beta 1/2: on-device IMAGE inference gets the app SIGKILLed on
+// contact (instant signal 9 with ~3.3GB free — a policy kill, not memory;
+// text inference works fine). Beta 3 release notes claim FM runtime fixes —
+// re-enable and retest after updating the test device. Until then photos
+// route through Vision OCR + on-device TEXT cleanup, which works.
+const IMAGE_INPUT_ENABLED = false
+
 export async function checkAppleIntelligence() {
   if (!isNative() || getPlatform() !== 'ios') {
     return { ok: false, reason: 'not native iOS', supportsImage: false }
@@ -46,7 +55,7 @@ export async function checkAppleIntelligence() {
       ok: !!available,
       reason: reason || (available ? 'available' : 'unknown'),
       // iOS 27+: the model accepts the photo directly (no OCR step).
-      supportsImage: !!supportsImage,
+      supportsImage: !!supportsImage && IMAGE_INPUT_ENABLED,
     }
   } catch (e) {
     return { ok: false, reason: `isAvailable threw: ${e?.message || e}`, supportsImage: false }

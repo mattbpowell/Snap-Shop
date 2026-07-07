@@ -1,5 +1,6 @@
 import Capacitor
 import UIKit
+import ImageIO
 
 #if canImport(FoundationModels)
 import FoundationModels
@@ -157,14 +158,40 @@ public class AppleLLMPlugin: CAPPlugin, CAPBridgedPlugin {
     /// MEAL PLAN behaves exactly like a typed one: dish names are detected and
     /// expanded into ingredients, each tagged with the dish it belongs to.
     /// Literal items come through with forDishes empty.
+    /// Decode + downsample in one step via ImageIO. Camera photos arrive at
+    /// 24 MP (5712×4284); decoding that to a full bitmap (~98 MB) and handing
+    /// it to the vision encoder on top of model load got the app jetsammed
+    /// (signal 9) on device. Thumbnailing never materializes the full bitmap
+    /// and bakes in EXIF orientation. ~1600 px long edge is plenty for the
+    /// image encoder.
+    private static func downsampledImage(from data: Data, maxPixel: Int) -> CGImage? {
+        let srcOpts: [CFString: Any] = [kCGImageSourceShouldCache: false]
+        guard let src = CGImageSourceCreateWithData(data as CFData, srcOpts as CFDictionary) else {
+            return nil
+        }
+        let thumbOpts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(src, 0, thumbOpts as CFDictionary)
+    }
+
+    /// Free memory visible to this process, in MB — for chasing jetsam kills.
+    private static func availableMemoryMB() -> Int {
+        Int(os_proc_available_memory() / (1024 * 1024))
+    }
+
     @objc func parseImage(_ call: CAPPluginCall) {
+        print("⚡️ [AppleLLM] parseImage enter: availMem=\(Self.availableMemoryMB())MB")
         guard let base64 = call.getString("imageBase64"),
               let data = Data(base64Encoded: base64),
-              let uiImage = UIImage(data: data),
-              let cgImage = uiImage.cgImage else {
+              let cgImage = Self.downsampledImage(from: data, maxPixel: 1024) else {
             call.reject("Invalid image data")
             return
         }
+        print("⚡️ [AppleLLM] downsampled to \(cgImage.width)x\(cgImage.height): availMem=\(Self.availableMemoryMB())MB")
         let instructions = call.getString("instructions") ?? ""
         let prompt = call.getString("prompt")
             ?? "Read this photo of a shopping list or meal plan and produce the full shopping list."
@@ -192,11 +219,24 @@ public class AppleLLMPlugin: CAPPlugin, CAPBridgedPlugin {
                     }
                 }
 
+                // Heartbeat: log free memory each second while inference runs,
+                // so a jetsam kill leaves a visible death spiral in the console.
+                let heartbeat = Task {
+                    var tick = 0
+                    while !Task.isCancelled {
+                        print("⚡️ [AppleLLM] inference t+\(tick)s: availMem=\(Self.availableMemoryMB())MB")
+                        tick += 1
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    }
+                }
+                defer { heartbeat.cancel() }
+
                 do {
                     let session = instructions.isEmpty
                         ? LanguageModelSession()
                         : LanguageModelSession(instructions: { instructions })
                     let items = try await run(session)
+                    print("⚡️ [AppleLLM] inference done: availMem=\(Self.availableMemoryMB())MB, items=\(items.count)")
                     call.resolve(["items": items, "engine": "onDevice"])
                 } catch {
                     // On-device failed (e.g. model assets unavailable). Retry on

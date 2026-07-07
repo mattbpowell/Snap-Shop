@@ -145,3 +145,22 @@ This makes the entire native path Ollama-free.
   prioritize once the OCR pipeline lands.
 - 2 and 3 are layout polish — solve together when revisiting safe-area math.
 - 1 and 5 are both quality-of-experience upgrades.
+
+---
+
+## 7. Dish-header placement + nest-under behavior (2026-07-07, device testing)
+
+Two related UX notes from Matt while testing typed meal expansion on device:
+
+1. **Dish headers land in "Other" and feel stranded.** "Tacos" (the header
+   item for the expansion) gets categorized to Other, away from its
+   ingredients. Options: a dedicated "Meals" pseudo-section that renders
+   above everything; or render the dish as a group header with its
+   ingredients indented under it (bigger UI change); or auto-check the dish
+   header (it's not shoppable itself).
+2. **✨ Nest-under doesn't relocate the original.** When suggestions are
+   nested under an item, the parent stays where it was (e.g. Tacos in
+   Other). Nesting should either move the parent adjacent to its children
+   or restyle it as a header.
+
+Both are review-screen information-architecture questions — solve together.
