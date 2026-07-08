@@ -123,3 +123,8 @@ physical iPhone 16 Pro (iOS 27.0):
    whiteboard + events magnet in frame): no crash, editable list. Known
    fallback limits: raw casing, background print leaks (magnet text) —
    all things the image model path exists to fix.
+
+7. **Apple Feedback filed 2026-07-07** for the image-Attachment SIGKILL
+   (draft: apple-feedback-fm-image-sigkill.md; FB number: ask Matt / add when
+   handy). Retest cadence: flip IMAGE_INPUT_ENABLED in src/lib/onDeviceLLM.js
+   and rebuild on each new iOS 27 beta; close this note when it survives.
