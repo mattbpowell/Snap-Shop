@@ -34,11 +34,12 @@ function withTimeout(promise, ms, label) {
 
 // KILL-SWITCH for direct image input to Foundation Models.
 //
-// iOS 27 beta 1/2: on-device IMAGE inference gets the app SIGKILLed on
-// contact (instant signal 9 with ~3.3GB free — a policy kill, not memory;
-// text inference works fine). Beta 3 release notes claim FM runtime fixes —
-// re-enable and retest after updating the test device. Until then photos
-// route through Vision OCR + on-device TEXT cleanup, which works.
+// iOS 27 beta 1 through 4 (24A5380h, 24A5390f): on-device IMAGE inference
+// gets the app SIGKILLed on contact (instant signal 9 with ~3.3GB free — a
+// policy kill, not memory; text inference works fine). Retested on beta 4
+// 2026-07-08 — identical instant kill, no fix. Apple Feedback filed
+// 2026-07-07 (apple-feedback-fm-image-sigkill.md). Flip to true and rebuild
+// on each new beta to retest.
 const IMAGE_INPUT_ENABLED = false
 
 export async function checkAppleIntelligence() {

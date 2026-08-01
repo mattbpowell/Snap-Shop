@@ -128,3 +128,12 @@ physical iPhone 16 Pro (iOS 27.0):
    (draft: apple-feedback-fm-image-sigkill.md; FB number: ask Matt / add when
    handy). Retest cadence: flip IMAGE_INPUT_ENABLED in src/lib/onDeviceLLM.js
    and rebuild on each new iOS 27 beta; close this note when it survives.
+
+8. **Retested on beta 4 (24A5390f), 2026-07-08 — still crashes.** Identical
+   signature to beta 1-3: instant signal-9 kill at t+0s (before the 1s
+   heartbeat can even log once), ~3.3GB free at time of death. No change in
+   behavior across four betas. Kill-switch (IMAGE_INPUT_ENABLED in
+   src/lib/onDeviceLLM.js) confirmed back to false; app verified stable on
+   device afterward. Consider this now a "wait for Apple" item rather than
+   something to retest every beta reflexively — maybe check every 2-3 betas
+   or when Feedback gets a response.
