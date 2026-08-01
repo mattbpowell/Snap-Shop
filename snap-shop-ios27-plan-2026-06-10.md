@@ -152,3 +152,26 @@ physical iPhone 16 Pro (iOS 27.0):
    the diagnostic build's own checkpoints show none of that code is even
    reached. Feedback report upgraded with this isolation
    (apple-feedback-fm-image-sigkill.md).
+
+10. **Paused 2026-07-08 — Matt moving off the iOS 27 beta until public
+    release.** Status snapshot at pause:
+    - Image input: confirmed dies inside `Attachment(cgImage)` construction
+      itself (see #9), reproduced identically on beta 3 (24A5380h) and
+      beta 4 (24A5390f). Fresh-verified against the SDK swiftinterface that
+      our call matches the only public initializer signature — not a
+      calling-convention mistake.
+    - One avenue never finished: whether the SPECIFIC CGImage we hand it
+      (Display P3 / possible HDR gain-map, from a live iPhone camera photo
+      via CGImageSourceCreateThumbnailAtIndex) is a contributing factor
+      versus a flat "any image kills it" bug. Was mid-way through adding a
+      synthetic plain-sRGB-CGImage test to rule this in/out when Matt
+      paused. If resuming: that's the next concrete step before assuming
+      it's purely an Apple-side bug.
+    - Kill-switch (`IMAGE_INPUT_ENABLED` in src/lib/onDeviceLLM.js) is
+      `false` and committed; app is stable, ships the working OCR+text
+      on-device path.
+    - Apple Feedback filed and updated with the isolation repro
+      (apple-feedback-fm-image-sigkill.md).
+    - **On resume:** flip the kill-switch, rebuild, and pick up with the
+      synthetic-image color-space test before re-filing/updating Feedback
+      further. Check Feedback for any Apple response first.
