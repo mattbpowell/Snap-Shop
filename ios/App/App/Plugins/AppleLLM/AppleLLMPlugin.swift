@@ -205,23 +205,33 @@ public class AppleLLMPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
         print("⚡️ [AppleLLM] downsampled to \(cgImage.width)x\(cgImage.height): availMem=\(Self.availableMemoryMB())MB")
+
         let instructions = call.getString("instructions") ?? ""
         let prompt = call.getString("prompt")
             ?? "Read this photo of a shopping list or meal plan and produce the full shopping list."
 
         #if canImport(FoundationModels)
         if #available(iOS 27.0, *) {
+            // Construct the Attachment SYNCHRONOUSLY, outside the Task, so a
+            // print immediately after it proves construction itself didn't
+            // kill us — isolates "building the attachment" from "running
+            // inference" as two distinct, separately-observable steps.
+            let attachment = Attachment(cgImage)
+            print("⚡️ [AppleLLM] Attachment<Image> constructed: availMem=\(Self.availableMemoryMB())MB")
+
             Task {
                 let options = GenerationOptions(temperature: 0.2, maximumResponseTokens: 2048)
 
                 func run(_ session: LanguageModelSession) async throws -> [[String: Any]] {
+                    print("⚡️ [AppleLLM] entering session.respond(): availMem=\(Self.availableMemoryMB())MB")
                     let response = try await session.respond(
                         generating: ParsedGroceryList.self,
                         options: options
                     ) {
                         prompt
-                        Attachment(cgImage)
+                        attachment
                     }
+                    print("⚡️ [AppleLLM] session.respond() returned: availMem=\(Self.availableMemoryMB())MB")
                     return response.content.items.map { item in
                         [
                             "name": item.name,

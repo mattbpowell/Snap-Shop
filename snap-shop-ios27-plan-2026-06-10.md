@@ -137,3 +137,18 @@ physical iPhone 16 Pro (iOS 27.0):
    device afterward. Consider this now a "wait for Apple" item rather than
    something to retest every beta reflexively — maybe check every 2-3 betas
    or when Feedback gets a response.
+
+9. **Isolated the crash to a single API call, 2026-07-08.** Added
+   checkpoint prints around `Attachment(cgImage)` construction (outside
+   any Task/session/respond() call). Result: the "before" print fires
+   every time; the "after" print NEVER fires. The process is SIGKILLed
+   synchronously inside `Attachment.init(_ cgImage:orientation:)` itself —
+   before LanguageModelSession, before respond(), before any model
+   inference. Text-only respond() with identical session/plugin scaffolding
+   works reliably. This is strong evidence the bug is in Apple's
+   FoundationModels framework code (or an undocumented gating requirement on
+   that specific initializer), not in our implementation — we've ruled out
+   our prompt building, session setup, threading, and Capacitor bridging as
+   the diagnostic build's own checkpoints show none of that code is even
+   reached. Feedback report upgraded with this isolation
+   (apple-feedback-fm-image-sigkill.md).
