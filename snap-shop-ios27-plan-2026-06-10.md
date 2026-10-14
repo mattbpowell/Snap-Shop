@@ -195,3 +195,19 @@ physical iPhone 16 Pro (iOS 27.0):
       2048-token response budget overflows, respond() throws (catchable) and
       JS falls back to OCR — watch for exceededContextWindowSize in logs and
       drop maxPixel to 768 if so.
+
+12. **IMAGE INPUT WORKS — 2026-10-14, iPhone 16 Pro, iOS 27.0.1 (24A446),
+    Xcode 27.0 (27A266a).** First strategy (`imageURL`) succeeded first try,
+    no crash, no guard trip. Matt's verdict on the whiteboard result: "10/10".
+    - Input was 600×800, already sRGB 8-bit (JS preprocess) — so the
+      Display-P3/HDR theory was NOT the cause for this image. Whether the fix
+      is the imageURL initializer or an OS-side fix in 27.0.x is unknown
+      (would need a deliberate cgImage-strategy test; guard makes that safe
+      but costs one crash). Not needed for shipping.
+    - Timing: ~10 s inside respond() (heartbeat ticks 0–9). Memory flat at
+      ~3.35 GB free throughout. Matt: "Reading photo is quite slow".
+    - Next: perceived-speed work (stream partial results into the list via
+      streamResponse; prewarm a session with IMAGE_INSTRUCTIONS when the
+      camera/picker opens), then retire DECORATIVE_SOLO_WORDS from the native
+      image path (keep on OCR fallback). Update Apple Feedback as resolved on
+      release with the imageURL note.
