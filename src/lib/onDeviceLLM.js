@@ -34,24 +34,28 @@ function withTimeout(promise, ms, label) {
 
 // KILL-SWITCH for direct image input to Foundation Models.
 //
-// iOS 27 beta 1 through 4 (24A5380h, 24A5390f): on-device IMAGE inference
-// gets the app SIGKILLed on contact (instant signal 9 with ~3.3GB free — a
-// policy kill, not memory; text inference works fine). Retested on beta 4
-// 2026-07-08 — identical instant kill, no fix. Apple Feedback filed
-// 2026-07-07 (apple-feedback-fm-image-sigkill.md). Flip to true and rebuild
-// on each new beta to retest.
-const IMAGE_INPUT_ENABLED = false
+// History: iOS 27 betas 1–4 SIGKILLed the app inside Attachment(cgImage)
+// construction (apple-feedback-fm-image-sigkill.md). Re-enabled 2026-10-14
+// for iOS 27.0 release because the native side now has a cross-launch crash
+// guard (AppleLLMPlugin.swift, above parseImage): it cycles attachment
+// strategies (imageURL → sRGB CGImage → raw CGImage), records any that kill
+// the process, and reports supportsImage=false once all have failed on the
+// current OS build — so a user can never get stuck in a crash loop, and
+// every iOS update gets an automatic retest. Set false only to force the
+// OCR path for comparison.
+const IMAGE_INPUT_ENABLED = true
 
 export async function checkAppleIntelligence() {
   if (!isNative() || getPlatform() !== 'ios') {
     return { ok: false, reason: 'not native iOS', supportsImage: false }
   }
   try {
-    const { available, reason, supportsImage } = await withTimeout(
+    const { available, reason, supportsImage, imageStrategy, imageStrategiesFailed } = await withTimeout(
       AppleLLM.isAvailable(),
       READINESS_TIMEOUT_MS,
       'isAvailable'
     )
+    console.log('[AppleLLM] availability:', { available, reason, supportsImage, imageStrategy, imageStrategiesFailed })
     return {
       ok: !!available,
       reason: reason || (available ? 'available' : 'unknown'),

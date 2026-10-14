@@ -131,6 +131,7 @@ public class AppleLLMPlugin: CAPPlugin, CAPBridgedPlugin {
     /// so the user's first scan doesn't pay the full model-load cost inside
     /// "Cleaning up…". prewarm() is non-blocking; weights load system-wide.
     override public func load() {
+        Self.reconcileImageCrashGuard()
         #if canImport(FoundationModels)
         if #available(iOS 26.0, *) {
             if case .available = SystemLanguageModel.default.availability {
@@ -146,11 +147,17 @@ public class AppleLLMPlugin: CAPPlugin, CAPBridgedPlugin {
             // `supportsImage` is true on iOS 27+, where Foundation Models
             // accepts an image attachment directly — letting us hand the
             // model the photo instead of OCR'ing to text first.
+            // Also false once every attachment strategy has crashed on this
+            // OS build (see the crash guard above parseImage).
             var supportsImage = false
-            if #available(iOS 27.0, *) { supportsImage = true }
+            if #available(iOS 27.0, *) { supportsImage = Self.nextImageStrategy != nil }
             switch SystemLanguageModel.default.availability {
             case .available:
-                call.resolve(["available": true, "reason": "available", "supportsImage": supportsImage])
+                call.resolve([
+                    "available": true, "reason": "available", "supportsImage": supportsImage,
+                    "imageStrategy": Self.nextImageStrategy ?? "none",
+                    "imageStrategiesFailed": Self.failedImageStrategies,
+                ])
             case .unavailable(let reason):
                 call.resolve(["available": false, "reason": String(describing: reason), "supportsImage": false])
             @unknown default:
@@ -196,6 +203,93 @@ public class AppleLLMPlugin: CAPPlugin, CAPBridgedPlugin {
         Int(os_proc_available_memory() / (1024 * 1024))
     }
 
+    // ── Image-attachment crash guard ────────────────────────────────────────
+    //
+    // On iOS 27 betas 1–4, `Attachment(cgImage)` got the process SIGKILLed
+    // synchronously (uncatchable — no Swift error, no crash log). A SIGKILL
+    // can't be handled in-process, so we guard across launches instead:
+    //
+    //   1. Before touching the image API we persist which construction
+    //      STRATEGY we're about to try ("in flight").
+    //   2. When the call finishes (success or a normal thrown error) we clear it.
+    //   3. On next launch, a leftover in-flight marker means that strategy
+    //      killed us → record it as failed and move on to the next strategy.
+    //   4. If every strategy has failed, isAvailable reports
+    //      supportsImage=false and the JS falls back to the OCR + text path.
+    //
+    // The failed-list is keyed to the OS build, so each iOS update gets a
+    // fresh retest automatically. Net effect: a user can crash AT MOST once
+    // per strategy per OS build, never loop.
+    //
+    // Strategy order: imageURL first — it's the path a third-party project
+    // (huggingface/AnyLanguageModel #241) verified end-to-end on an iOS 27
+    // iPhone — then a flattened plain-sRGB CGImage (rules out Display P3 /
+    // HDR gain-map camera images), then the raw downsampled CGImage.
+    static let imageStrategies = ["imageURL", "srgbCGImage", "cgImage"]
+    private static let kInFlight = "AppleLLM.imageAttemptInFlight"
+    private static let kFailed = "AppleLLM.imageStrategiesFailed"
+    private static let kFailedBuild = "AppleLLM.imageStrategiesFailedOSBuild"
+
+    private static var osBuild: String { ProcessInfo.processInfo.operatingSystemVersionString }
+
+    /// Call once at launch: convert a leftover in-flight marker into a failure.
+    private static func reconcileImageCrashGuard() {
+        let d = UserDefaults.standard
+        if d.string(forKey: kFailedBuild) != osBuild {
+            // New OS build → forget old failures, retest everything.
+            d.set([String](), forKey: kFailed)
+            d.set(osBuild, forKey: kFailedBuild)
+        }
+        if let crashed = d.string(forKey: kInFlight) {
+            var failed = d.stringArray(forKey: kFailed) ?? []
+            if !failed.contains(crashed) { failed.append(crashed) }
+            d.set(failed, forKey: kFailed)
+            d.removeObject(forKey: kInFlight)
+            print("⚡️ [AppleLLM] previous launch was killed during image strategy '\(crashed)' — marked failed. failed=\(failed)")
+        }
+    }
+
+    private static var failedImageStrategies: [String] {
+        UserDefaults.standard.stringArray(forKey: kFailed) ?? []
+    }
+
+    /// Next strategy that hasn't killed us on this OS build, or nil if none left.
+    private static var nextImageStrategy: String? {
+        let failed = failedImageStrategies
+        return imageStrategies.first { !failed.contains($0) }
+    }
+
+    private static func markInFlight(_ strategy: String?) {
+        let d = UserDefaults.standard
+        if let strategy { d.set(strategy, forKey: kInFlight) } else { d.removeObject(forKey: kInFlight) }
+        d.synchronize() // must hit disk BEFORE a potential SIGKILL
+    }
+
+    /// Re-render into a plain 8-bit sRGB, no-alpha bitmap. Strips Display P3,
+    /// 16-bit/HDR, gain maps and odd pixel formats from camera photos.
+    private static func flattenedSRGB(_ image: CGImage) -> CGImage? {
+        guard let srgb = CGColorSpace(name: CGColorSpace.sRGB),
+              let ctx = CGContext(
+                data: nil, width: image.width, height: image.height,
+                bitsPerComponent: 8, bytesPerRow: 0, space: srgb,
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+              ) else { return nil }
+        ctx.interpolationQuality = .high
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return ctx.makeImage()
+    }
+
+    /// Write a flattened sRGB JPEG to a temp file (for Attachment(imageURL:)).
+    private static func writeTempJPEG(_ image: CGImage) -> URL? {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("snapshop-scan-\(UUID().uuidString).jpg")
+        guard let dest = CGImageDestinationCreateWithURL(url as CFURL, "public.jpeg" as CFString, 1, nil) else {
+            return nil
+        }
+        CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary)
+        return CGImageDestinationFinalize(dest) ? url : nil
+    }
+
     @objc func parseImage(_ call: CAPPluginCall) {
         print("⚡️ [AppleLLM] parseImage enter: availMem=\(Self.availableMemoryMB())MB")
         guard let base64 = call.getString("imageBase64"),
@@ -204,7 +298,7 @@ public class AppleLLMPlugin: CAPPlugin, CAPBridgedPlugin {
             call.reject("Invalid image data")
             return
         }
-        print("⚡️ [AppleLLM] downsampled to \(cgImage.width)x\(cgImage.height): availMem=\(Self.availableMemoryMB())MB")
+        print("⚡️ [AppleLLM] downsampled to \(cgImage.width)x\(cgImage.height) colorSpace=\(String(describing: cgImage.colorSpace?.name)) bpc=\(cgImage.bitsPerComponent): availMem=\(Self.availableMemoryMB())MB")
 
         let instructions = call.getString("instructions") ?? ""
         let prompt = call.getString("prompt")
@@ -212,14 +306,49 @@ public class AppleLLMPlugin: CAPPlugin, CAPBridgedPlugin {
 
         #if canImport(FoundationModels)
         if #available(iOS 27.0, *) {
-            // Construct the Attachment SYNCHRONOUSLY, outside the Task, so a
-            // print immediately after it proves construction itself didn't
-            // kill us — isolates "building the attachment" from "running
-            // inference" as two distinct, separately-observable steps.
-            let attachment = Attachment(cgImage)
-            print("⚡️ [AppleLLM] Attachment<Image> constructed: availMem=\(Self.availableMemoryMB())MB")
+            guard let strategy = call.getString("strategy") ?? Self.nextImageStrategy else {
+                call.reject("Image input disabled: every attachment strategy crashed on this OS build (\(Self.failedImageStrategies))")
+                return
+            }
+
+            // Prepare inputs BEFORE marking in-flight, so a failure in our own
+            // image prep is never blamed on Apple's initializer.
+            var tempURL: URL? = nil
+            var prepared: CGImage = cgImage
+            switch strategy {
+            case "imageURL":
+                guard let flat = Self.flattenedSRGB(cgImage), let url = Self.writeTempJPEG(flat) else {
+                    call.reject("Could not prepare image file"); return
+                }
+                tempURL = url
+            case "srgbCGImage":
+                guard let flat = Self.flattenedSRGB(cgImage) else {
+                    call.reject("Could not flatten image to sRGB"); return
+                }
+                prepared = flat
+            default:
+                break
+            }
+
+            // Construct the Attachment SYNCHRONOUSLY so the checkpoint print
+            // after it proves construction itself survived.
+            print("⚡️ [AppleLLM] constructing Attachment via strategy=\(strategy)")
+            Self.markInFlight(strategy)
+            let attachment: Attachment<ImageAttachmentContent>
+            if let tempURL {
+                attachment = Attachment(imageURL: tempURL)
+            } else {
+                attachment = Attachment(prepared)
+            }
+            print("⚡️ [AppleLLM] Attachment<Image> constructed (strategy=\(strategy)): availMem=\(Self.availableMemoryMB())MB")
 
             Task {
+                // Whatever happens below (success or thrown error), we
+                // survived — clear the crash marker and the temp file.
+                defer {
+                    Self.markInFlight(nil)
+                    if let tempURL { try? FileManager.default.removeItem(at: tempURL) }
+                }
                 let options = GenerationOptions(temperature: 0.2, maximumResponseTokens: 2048)
 
                 func run(_ session: LanguageModelSession) async throws -> [[String: Any]] {
@@ -260,7 +389,7 @@ public class AppleLLMPlugin: CAPPlugin, CAPBridgedPlugin {
                         : LanguageModelSession(instructions: { instructions })
                     let items = try await run(session)
                     print("⚡️ [AppleLLM] inference done: availMem=\(Self.availableMemoryMB())MB, items=\(items.count)")
-                    call.resolve(["items": items, "engine": "onDevice"])
+                    call.resolve(["items": items, "engine": "onDevice", "strategy": strategy])
                 } catch {
                     // On-device failed (e.g. model assets unavailable). Retry on
                     // Private Cloud Compute — Apple-run, no keys, free tier.
