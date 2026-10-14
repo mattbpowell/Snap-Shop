@@ -175,3 +175,23 @@ physical iPhone 16 Pro (iOS 27.0):
     - **On resume:** flip the kill-switch, rebuild, and pick up with the
       synthetic-image color-space test before re-filing/updating Feedback
       further. Check Feedback for any Apple response first.
+
+11. **Resumed 2026-10-14 on iOS 27.0 / macOS 27.0 (26A428) release.**
+    - Found: Xcode is no longer installed (only Command Line Tools); old
+      beta simulator runtimes still occupy ~17 GB in /Library/Developer/
+      CoreSimulator + ~8 GB devices. Need released Xcode 27 before any build.
+    - No Apple release note mentions an Attachment crash fix. But
+      huggingface/AnyLanguageModel PR #241 reports image attachments verified
+      end-to-end on an iOS 27 iPhone, building them from **file URLs** —
+      an initializer we never tried (we only used `init(_ cgImage:)`).
+    - Implemented a cross-launch **crash guard** in AppleLLMPlugin: persist
+      the strategy in flight before constructing the Attachment; a leftover
+      marker on next launch marks it failed. Strategies in order:
+      `imageURL` (flattened sRGB JPEG in tmp) → `srgbCGImage` (re-rendered
+      8-bit sRGB, no alpha) → `cgImage` (raw). Failures reset per OS build.
+      isAvailable reports `imageStrategy` / `imageStrategiesFailed` and
+      supportsImage=false when all have failed. Kill-switch flipped to true.
+    - Note: on-device context is ~4K tokens (PCC 32K). If a 1024px image +
+      2048-token response budget overflows, respond() throws (catchable) and
+      JS falls back to OCR — watch for exceededContextWindowSize in logs and
+      drop maxPixel to 768 if so.
